@@ -4,7 +4,7 @@
   "description": "Real-time collaborative sync engine built from scratch with a custom CRDT",
   "type": "module",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test \"test/**/*.test.js\""
   },
   "license": "MIT"
 }

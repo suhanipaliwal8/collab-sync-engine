@@ -18,8 +18,32 @@ sync or CRDT libraries.
 - Phase 1: unique IDs + Lamport clock ✅
 - Phase 2: RGA insert/delete + CI ✅
 - Phase 3: convergence tests ✅
+- Phase 4: WebSocket server with live broadcast ✅
 
-**Tests: 32 passing**
+**Tests: 50 passing**
+
+## Architecture
+    Client A ──┐                          ┌── Client B
+               └── WebSocket ── Sync server ──┘
+                               └─ DocumentRoom: operation log + server replica
+
+- `DocumentRoom` knows nothing about sockets (a client is anything with a
+  `send()` method), so it is unit-tested with fake clients.
+- The server is a relay with a memory: it logs every operation, sends the full
+  log to newcomers, broadcasts each new operation to everyone except its
+  sender, and ignores duplicates. Conflict resolution happens in the CRDT, not
+  on the server.
+
+## Protocol (JSON over WebSocket)
+| Direction | Message |
+|---|---|
+| client → server | `{ "type": "op", "op": <insert or delete> }` |
+| server → client | `{ "type": "sync", "ops": [...] }` sent on connect |
+| server → client | `{ "type": "op", "op": <insert or delete> }` another client's edit |
+| server → client | `{ "type": "error", "message": "..." }` invalid input |
+
+Insert: `{ type: "insert", id, parentId, value }`. Delete: `{ type: "delete", targetId }`.
+Incoming messages are validated and sanitized (`src/server/protocol.js`).
 
 ## Core concepts
 - **Site**: one client's replica of the document.
@@ -39,29 +63,31 @@ sync or CRDT libraries.
 ## How convergence is tested
 Convergence means: any two sites that have received the same set of
 operations end in the same state, whatever the delivery order and even with
-duplicates. We check it three ways:
+duplicates.
 1. **Exhaustive**: 6 operations (3 concurrent) delivered in all 720 orders.
 2. **Duplicates**: every operation delivered twice in shuffled order.
 3. **Randomized simulation**: 2, 3 and 5 sites make random edits while messages
    arrive late, out of order or duplicated. Runs are seeded, so any failure
    can be reproduced from its seed.
+4. **Over a real network**: two clients edit through the WebSocket server and
+   end with identical text.
 
-Replicas are compared by full internal state (including tombstones), not just
-visible text. These tests are strong evidence of convergence, not a
-mathematical proof.
+Replicas are compared by full internal state (including tombstones). These
+tests are strong evidence of convergence, not a mathematical proof.
 
 ## Project structure
-    src/crdt/id.js              character IDs and ordering
-    src/crdt/lamport-clock.js   logical clock
-    src/crdt/rga-document.js    the RGA document
-    test/crdt/                  unit and convergence tests
-    test/helpers/               seeded random + simulation helpers
+    src/crdt/        IDs, Lamport clock, RGA document
+    src/server/      protocol validation, DocumentRoom, WebSocket server
+    test/            unit, convergence and integration tests
+    test/helpers/    seeded random, simulation, WebSocket test client
 
 ## Getting started
 Requires a recent Node.js LTS (22+).
 
+    npm install
     npm test
+    npm start        # ws://localhost:8080 (set PORT to change)
 
 ## Roadmap
-WebSocket server → browser client → PostgreSQL history (Docker) → revert →
-offline/reconnect → presence.
+Browser client → PostgreSQL history (Docker) → revert → offline/reconnect →
+hardening → presence.

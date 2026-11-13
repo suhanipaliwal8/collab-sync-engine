@@ -4,7 +4,11 @@
   "description": "Real-time collaborative sync engine built from scratch with a custom CRDT",
   "type": "module",
   "scripts": {
+    "start": "node src/server/index.js",
     "test": "node --test \"test/**/*.test.js\""
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.23.0"
+  }
 }

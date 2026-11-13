@@ -12,7 +12,15 @@ sync or CRDT libraries.
 - Formal convergence tests
 
 ## Status
-Phase 0: project setup ✅
+- Phase 0: project setup ✅
+- Phase 1: unique IDs + Lamport clock ✅
+
+## Core concepts
+- **Site**: one client's replica of the document.
+- **Character ID**: `{ counter, siteId }`, unique and totally ordered, so edits
+  target characters instead of shifting positions.
+- **Lamport clock**: a logical counter (not wall-clock time) that guarantees an
+  operation created after seeing another has a larger ID.
 
 ## Getting started
 Requires Node.js 20+.

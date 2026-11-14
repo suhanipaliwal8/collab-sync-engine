@@ -1,7 +1,6 @@
-import { RgaDocument } from './crdt/rga-document.js';
+import { SyncClient } from './client/sync-client.js';
 import {
   diffText,
-  applyChangeToDocument,
   adjustCaret,
   utf16ToCodePointIndex,
   codePointToUtf16Index,
@@ -10,6 +9,7 @@ import { createSiteId } from './client/site-id.js';
 
 const textarea = document.querySelector('#editor');
 const statusLabel = document.querySelector('#status');
+const offlineToggle = document.querySelector('#offline-toggle');
 
 // On a phone there are no developer tools, so show unexpected errors on the page.
 window.addEventListener('error', (event) => setStatus(`Error: ${event.message}`, 'bad'));
@@ -23,20 +23,23 @@ const historyPreview = document.querySelector('#history-preview');
 const historyRestore = document.querySelector('#history-restore');
 const historyClose = document.querySelector('#history-close');
 
-// Every browser tab is its own "site" with its own unique ID.
-const siteId = createSiteId();
-const doc = new RgaDocument(siteId);
-document.querySelector('#site-id').textContent = siteId;
-
 function setStatus(text, kind) {
   statusLabel.textContent = text;
   statusLabel.className = kind;
 }
 
+function safeSessionStorage() {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null; // storage can be blocked by browser privacy settings
+  }
+}
+
 // Show the document's text in the textarea, keeping the user's caret in place.
 function render() {
   const oldText = textarea.value;
-  const newText = doc.getText();
+  const newText = client.text;
   if (newText === oldText) return;
 
   const change = diffText(oldText, newText);
@@ -50,48 +53,59 @@ function render() {
   );
 }
 
-const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-const socket = new WebSocket(`${scheme}://${location.host}`);
+let wasReady = false;
 
-socket.addEventListener('message', (event) => {
-  const message = JSON.parse(event.data);
+function showStatus({ status, unsent }) {
+  const pending = unsent > 0 ? ` · ${unsent} unsent edit${unsent === 1 ? '' : 's'}` : '';
+  if (status === 'online') setStatus('Connected', 'ok');
+  else if (status === 'connecting') setStatus(`Connecting…${pending}`, '');
+  else setStatus(`Offline${pending}. Edits are kept and will sync when you reconnect`, 'bad');
 
-  if (message.type === 'sync') {
-    message.ops.forEach((op) => doc.applyRemote(op));
-    render();
-    textarea.disabled = false; // we have the history; editing is safe now
-    historyOpen.disabled = false;
-    textarea.focus();
-    setStatus('Connected', 'ok');
-  } else if (message.type === 'op') {
-    doc.applyRemote(message.op);
-    render();
-  } else if (message.type === 'reverted') {
+  const ready = client.hasSynced; // editing is safe once we have received the history once
+  textarea.disabled = !ready;
+  offlineToggle.disabled = !ready;
+  historyOpen.disabled = status !== 'online';
+  offlineToggle.textContent = client.paused ? 'Go online' : 'Simulate offline';
+  if (ready && !wasReady) textarea.focus();
+  wasReady = ready;
+}
+
+function showNotice(message) {
+  if (message.type === 'reverted') {
     setStatus(
       message.operations === 0
         ? `Already at version ${message.version}`
         : `Restored version ${message.version}`,
       'ok',
     );
-    setTimeout(() => setStatus('Connected', 'ok'), 3000);
+    setTimeout(() => showStatus({ status: client.status, unsent: client.unsentCount }), 3000);
   } else if (message.type === 'error') {
     console.warn('Server error:', message.message);
     setStatus(`Server: ${message.message}`, 'bad');
   }
-});
+}
 
-socket.addEventListener('close', () => {
-  textarea.readOnly = true; // reconnect support arrives in Phase 8
-  historyOpen.disabled = true;
-  setStatus('Disconnected. Reload the page.', 'bad');
+const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+const client = new SyncClient({
+  siteId: createSiteId(), // a fresh site ID per page load, so IDs can never collide
+  createSocket: () => new WebSocket(`${scheme}://${location.host}`),
+  storage: safeSessionStorage(),
+  onChange: render,
+  onStatus: showStatus,
+  onNotice: showNotice,
 });
+document.querySelector('#site-id').textContent = client.doc.siteId;
+client.connect();
 
 // The user typed, pasted or deleted something.
 textarea.addEventListener('input', () => {
-  const change = diffText(doc.getText(), textarea.value);
-  for (const op of applyChangeToDocument(doc, change)) {
-    socket.send(JSON.stringify({ type: 'op', op }));
-  }
+  client.edit(diffText(client.text, textarea.value));
+});
+
+offlineToggle.addEventListener('click', () => {
+  if (client.paused) client.goOnline();
+  else client.goOffline();
+  showStatus({ status: client.status, unsent: client.unsentCount });
 });
 
 // ---------- History panel (time travel) ----------
@@ -134,7 +148,9 @@ historySlider.addEventListener('input', () => {
 });
 
 historyRestore.addEventListener('click', () => {
-  socket.send(JSON.stringify({ type: 'revert', version: Number(historySlider.value) }));
+  if (!client.revert(Number(historySlider.value))) {
+    setStatus('Go online to restore a version', 'bad');
+  }
   historyPanel.hidden = true;
 });
 

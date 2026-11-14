@@ -43,6 +43,10 @@ test('serves every browser module as JavaScript', options, async () => {
       '/crdt/id.js',
       '/crdt/lamport-clock.js',
       '/crdt/rga-document.js',
+      '/client/backoff.js',
+      '/client/outbox.js',
+      '/client/sync-client.js',
+      '/crdt/operation-key.js',
     ];
     for (const path of paths) {
       const res = await rawGet(server.port, path);

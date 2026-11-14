@@ -21,7 +21,7 @@ sync or CRDT libraries.
 - Phase 4: WebSocket server with live broadcast ✅
 - Phase 5: browser editor ✅
 
-**Tests: 66 passing**
+**Tests: 69 passing**
 
 ## Try it
     npm install
@@ -103,6 +103,11 @@ Requires a recent Node.js LTS (22+).
     npm install
     npm test
     npm start        # http://localhost:8080 (set PORT to change)
+
+## Opening it from a phone
+Use `http://<your-computer-ip>:8080` on the same Wi-Fi. Plain `http://` pages are
+not "secure contexts", so browser code must avoid APIs such as
+`crypto.randomUUID()`; site IDs use `crypto.getRandomValues` instead.
 
 ## Known limitations
 - The log is in memory: restarting the server loses the document (Phase 6).

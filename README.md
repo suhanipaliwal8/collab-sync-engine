@@ -19,34 +19,56 @@ sync or CRDT libraries.
 - Phase 2: RGA insert/delete + CI ✅
 - Phase 3: convergence tests ✅
 - Phase 4: WebSocket server with live broadcast ✅
-- Phase 5: browser editor ✅
+- Phase 5: browser editor ✅ (+ phone fix)
+- Phase 6: PostgreSQL persistence, Docker, logging ✅
 
-**Tests: 69 passing**
+**Tests: 84 passing**
 
 ## Try it
+Requires Node.js LTS (22+) and Docker Desktop.
+
     npm install
+    npm run db:up      # starts PostgreSQL in Docker (port 5433)
     npm start
 
-Open http://localhost:8080 in two browser windows and type in both.
+Open http://localhost:8080 in two browser windows and type in both. The
+terminal prints a URL for other devices on the same Wi-Fi (e.g. your phone).
+Stop and restart the server: the document is still there.
+
+    npm run db:down    # stop the database (data is kept in a Docker volume)
+
+## Configuration
+| Variable | Default | Meaning |
+|---|---|---|
+| `PORT` | `8080` | HTTP + WebSocket port |
+| `LOG_LEVEL` | `debug` | `debug` (every operation), `info`, `warn`, `error` |
+| `DATABASE_URL` | local Docker database | PostgreSQL connection string |
+
+The typed text is never written to the logs, only operation types and IDs.
 
 ## Architecture
-    Browser tab (RgaDocument + textarea) ── WebSocket ── Sync server ── DocumentRoom
+    Browser tab (RgaDocument + textarea) ── WebSocket ── Sync server ── DocumentRoom ── PostgreSQL
                                                   └─ same port also serves the page over HTTP
 
 - **Shared code**: the exact same `src/crdt/*.js` modules run in the server and
   in the browser.
 - **Local-first**: an edit is applied to the local document immediately, then
   sent to the server as an operation.
-- **Server = relay with a memory**: it logs every operation, sends the full log
-  to newcomers, broadcasts each new operation to everyone except its sender and
-  ignores duplicates. Conflict resolution happens in the CRDT, not on the server.
+- **Server = relay with a durable log**: it saves every operation to PostgreSQL
+  *before* broadcasting it, sends the full history to newcomers, broadcasts to
+  everyone except the sender and ignores duplicates. Conflict resolution
+  happens in the CRDT, not on the server.
+- **Append-only storage**: table `operations(seq, document_id, op_key, op JSONB,
+  created_at)`. `seq` is arrival order (used for history/revert);
+  `UNIQUE (document_id, op_key)` makes duplicate storage impossible.
+- **Ordered processing**: the room handles one operation at a time, so storage
+  order matches arrival order.
 - **Text box binding**: a textarea only reports its new full text, so
   `src/client/text-diff.js` diffs old and new text into delete/insert
   operations, and keeps the caret in place when remote edits arrive.
-- **Static files** are served from an allow-list of exact URLs (no path built
-  from user input).
-- `DocumentRoom` knows nothing about sockets, and browser logic lives in pure,
-  unit-tested functions; `public/client.js` is only thin glue.
+- **Static files** are served from an allow-list of exact URLs.
+- `DocumentRoom` knows nothing about sockets or SQL (it receives a store and a
+  logger), and browser logic lives in pure, unit-tested functions.
 
 ## Protocol (JSON over WebSocket)
 | Direction | Message |
@@ -54,7 +76,7 @@ Open http://localhost:8080 in two browser windows and type in both.
 | client → server | `{ "type": "op", "op": <insert or delete> }` |
 | server → client | `{ "type": "sync", "ops": [...] }` sent on connect |
 | server → client | `{ "type": "op", "op": <insert or delete> }` another client's edit |
-| server → client | `{ "type": "error", "message": "..." }` invalid input |
+| server → client | `{ "type": "error", "message": "..." }` invalid input or save failure |
 
 Insert: `{ type: "insert", id, parentId, value }`. Delete: `{ type: "delete", targetId }`.
 Incoming messages are validated and sanitized (`src/server/protocol.js`).
@@ -91,28 +113,29 @@ tests are strong evidence of convergence, not a mathematical proof.
 
 ## Project structure
     src/crdt/        IDs, Lamport clock, RGA document (shared with the browser)
-    src/client/      text diff + caret logic (shared with the browser)
-    src/server/      protocol validation, DocumentRoom, HTTP + WebSocket server
+    src/client/      text diff, caret logic, site ID (shared with the browser)
+    src/server/      protocol, DocumentRoom, operation store, logger, HTTP + WebSocket server
     public/          index.html and client.js (browser glue)
+    docker-compose.yml   PostgreSQL for development
     test/            unit, convergence and integration tests
     test/helpers/    seeded random, simulation, WebSocket test client
 
-## Getting started
-Requires a recent Node.js LTS (22+).
+## Testing
+Database tests need PostgreSQL running (`npm run db:up`); CI starts one as a
+service container. Tests use their own document IDs and clean up after
+themselves, so your development data is not touched.
 
-    npm install
     npm test
-    npm start        # http://localhost:8080 (set PORT to change)
 
 ## Opening it from a phone
-Use `http://<your-computer-ip>:8080` on the same Wi-Fi. Plain `http://` pages are
-not "secure contexts", so browser code must avoid APIs such as
-`crypto.randomUUID()`; site IDs use `crypto.getRandomValues` instead.
+Use the Wi-Fi URL printed at startup. Plain `http://` pages are not "secure
+contexts", so browser code must avoid APIs such as `crypto.randomUUID()`;
+site IDs use `crypto.getRandomValues` instead.
 
 ## Known limitations
-- The log is in memory: restarting the server loses the document (Phase 6).
 - After a disconnect the page must be reloaded (Phase 8).
-- No authentication or rate limiting yet (Phase 9).
+- The whole log is kept in memory and re-sent to each newcomer (no snapshots).
+- Single document ("default"); no authentication or rate limiting yet (Phase 9).
 
 ## Roadmap
-PostgreSQL history (Docker) → revert → offline/reconnect → hardening → presence.
+History and revert → offline/reconnect → hardening → presence.

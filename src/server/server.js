@@ -3,21 +3,42 @@ import WebSocket, { WebSocketServer } from 'ws';
 import { DocumentRoom } from './document-room.js';
 import { parseClientMessage } from './protocol.js';
 import { handleHttpRequest } from './static-files.js';
+import { silentLogger } from './logger.js';
 
 const MAX_MESSAGE_BYTES = 1024 * 1024; // refuse messages bigger than 1 MiB
 
+// "::ffff:192.168.1.5" is just IPv4 written in IPv6 style; show it plainly.
+function cleanAddress(address) {
+  return (address ?? 'unknown').replace(/^::ffff:/, '');
+}
+
 // Starts the server and resolves once it is listening.
 // Use port 0 to let the OS choose a free port (handy for tests).
-export function startSyncServer({ port = 8080 } = {}) {
-  const room = new DocumentRoom('default');
+export async function startSyncServer({
+  port = 8080,
+  documentId = 'default',
+  store = null,
+  logger = silentLogger,
+} = {}) {
+  const room = new DocumentRoom(documentId, { store, logger });
+  await room.restore(); // load saved history before accepting anyone
 
   // One port serves both plain HTTP (the web page) and WebSocket (live edits).
-  const httpServer = createServer(handleHttpRequest);
+  const httpServer = createServer((request, response) => {
+    response.on('finish', () => {
+      const from = cleanAddress(request.socket.remoteAddress);
+      logger.debug(`http ${request.method} ${request.url} → ${response.statusCode} (${from})`);
+    });
+    handleHttpRequest(request, response);
+  });
   const wss = new WebSocketServer({ server: httpServer, maxPayload: MAX_MESSAGE_BYTES });
 
-  wss.on('connection', (socket) => {
+  let nextClientNumber = 1;
+
+  wss.on('connection', (socket, request) => {
     // The room only knows "something with a send() method", not sockets.
     const client = {
+      id: `c${nextClientNumber++}`,
       send(message) {
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify(message));
@@ -25,21 +46,32 @@ export function startSyncServer({ port = 8080 } = {}) {
       },
     };
 
+    logger.info(`${client.id} connected from ${cleanAddress(request.socket.remoteAddress)}`);
     room.join(client);
 
-    socket.on('message', (data) => {
+    socket.on('message', async (data) => {
+      let message;
       try {
-        const message = parseClientMessage(data.toString());
-        room.receive(client, message.op);
+        message = parseClientMessage(data.toString());
       } catch (error) {
+        logger.warn(`${client.id} sent an invalid message: ${error.message}`);
         client.send({ type: 'error', message: error.message });
+        return;
+      }
+
+      try {
+        await room.receive(client, message.op);
+      } catch (error) {
+        // Details go to our log; the client only gets a generic message.
+        logger.error(`${client.id}: could not process operation: ${error.message}`);
+        client.send({ type: 'error', message: 'The server could not save that operation' });
       }
     });
 
     socket.on('close', () => room.leave(client));
 
     // Without this handler, one bad connection could crash the whole server.
-    socket.on('error', (error) => console.error('Socket error:', error.message));
+    socket.on('error', (error) => logger.error(`${client.id} socket error: ${error.message}`));
   });
 
   return new Promise((resolve) => {

@@ -3,6 +3,7 @@ import { buildDocument, textAtVersion } from '../crdt/history.js';
 import { idToString } from '../crdt/id.js';
 import { diffText, applyChangeToDocument } from '../client/text-diff.js';
 import { silentLogger } from './logger.js';
+import { operationKey } from '../crdt/operation-key.js';
 
 // One shared document. Knows nothing about WebSockets: a "client" is any
 // object with a send(message) method. The optional store saves operations.
@@ -131,12 +132,6 @@ export class DocumentRoom {
 function label(client) {
   if (!client) return 'the server';
   return client.id ?? 'a client';
-}
-
-function operationKey(op) {
-  return op.type === 'insert'
-    ? `ins:${idToString(op.id)}`
-    : `del:${idToString(op.targetId)}`;
 }
 
 // Deliberately shows IDs only, never the typed character (this is for logs).

@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import WebSocket, { WebSocketServer } from 'ws';
 import { DocumentRoom } from './document-room.js';
 import { parseClientMessage } from './protocol.js';
-import { handleHttpRequest } from './static-files.js';
+import { createHttpHandler } from './api.js';
 import { silentLogger } from './logger.js';
 
 const MAX_MESSAGE_BYTES = 1024 * 1024; // refuse messages bigger than 1 MiB
@@ -23,13 +23,14 @@ export async function startSyncServer({
   const room = new DocumentRoom(documentId, { store, logger });
   await room.restore(); // load saved history before accepting anyone
 
-  // One port serves both plain HTTP (the web page) and WebSocket (live edits).
+  // One port serves both plain HTTP (page + history API) and WebSocket (live edits).
+  const handleRequest = createHttpHandler(room);
   const httpServer = createServer((request, response) => {
     response.on('finish', () => {
       const from = cleanAddress(request.socket.remoteAddress);
       logger.debug(`http ${request.method} ${request.url} → ${response.statusCode} (${from})`);
     });
-    handleHttpRequest(request, response);
+    handleRequest(request, response);
   });
   const wss = new WebSocketServer({ server: httpServer, maxPayload: MAX_MESSAGE_BYTES });
 
@@ -60,11 +61,21 @@ export async function startSyncServer({
       }
 
       try {
-        await room.receive(client, message.op);
+        if (message.type === 'revert') {
+          logger.info(`${client.id} asked to revert to version ${message.version}`);
+          const result = await room.revertTo(message.version);
+          client.send({ type: 'reverted', version: message.version, operations: result.operations });
+        } else {
+          await room.receive(client, message.op);
+        }
       } catch (error) {
-        // Details go to our log; the client only gets a generic message.
-        logger.error(`${client.id}: could not process operation: ${error.message}`);
-        client.send({ type: 'error', message: 'The server could not save that operation' });
+        if (error instanceof RangeError) {
+          client.send({ type: 'error', message: error.message }); // e.g. unknown version: safe to show
+        } else {
+          // Details go to our log; the client only gets a generic message.
+          logger.error(`${client.id}: could not process ${message.type}: ${error.message}`);
+          client.send({ type: 'error', message: 'The server could not complete that request' });
+        }
       }
     });
 

@@ -4,6 +4,7 @@ import { DocumentRoom } from './document-room.js';
 import { parseClientMessage } from './protocol.js';
 import { createHttpHandler } from './api.js';
 import { silentLogger } from './logger.js';
+import { operationKey } from '../crdt/operation-key.js';
 
 const MAX_MESSAGE_BYTES = 1024 * 1024; // refuse messages bigger than 1 MiB
 
@@ -66,7 +67,8 @@ export async function startSyncServer({
           const result = await room.revertTo(message.version);
           client.send({ type: 'reverted', version: message.version, operations: result.operations });
         } else {
-          await room.receive(client, message.op);
+          await room.receive(client, message.op); // resolves once saved (or already saved)
+          client.send({ type: 'ack', opKey: operationKey(message.op) });
         }
       } catch (error) {
         if (error instanceof RangeError) {
@@ -90,6 +92,10 @@ export async function startSyncServer({
       resolve({
         room,
         port: httpServer.address().port,
+        // Abruptly disconnects every client (used by tests to simulate network failures).
+        dropClients() {
+          for (const socket of wss.clients) socket.terminate();
+        },
         close() {
           for (const socket of wss.clients) socket.terminate();
           httpServer.closeAllConnections();

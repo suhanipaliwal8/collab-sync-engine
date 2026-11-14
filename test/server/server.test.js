@@ -107,3 +107,42 @@ test('invalid input gets an error message and the connection stays usable', opti
     await server.close();
   }
 });
+
+test('the sender gets an acknowledgement once its operation is saved', options, async () => {
+  const server = await startSyncServer({ port: 0 });
+  try {
+    const alice = await connect(server.port);
+    await alice.next(); // sync
+    const op = {
+      type: 'insert',
+      id: { counter: 1, siteId: 'alice' },
+      parentId: { counter: 0, siteId: 'ROOT' },
+      value: 'x',
+    };
+    alice.send({ type: 'op', op });
+    assert.deepEqual(await alice.nextAck(), { type: 'ack', opKey: 'ins:1@alice' });
+  } finally {
+    await server.close();
+  }
+});
+
+test('a duplicate operation is acknowledged again but stored only once', options, async () => {
+  const server = await startSyncServer({ port: 0 });
+  try {
+    const alice = await connect(server.port);
+    await alice.next();
+    const op = {
+      type: 'insert',
+      id: { counter: 1, siteId: 'alice' },
+      parentId: { counter: 0, siteId: 'ROOT' },
+      value: 'x',
+    };
+    alice.send({ type: 'op', op });
+    alice.send({ type: 'op', op }); // as if the client re-sent it after a reconnect
+    await alice.nextAck();
+    await alice.nextAck();
+    assert.equal(server.room.versionCount, 1);
+  } finally {
+    await server.close();
+  }
+});

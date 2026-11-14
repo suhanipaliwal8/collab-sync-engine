@@ -1,17 +1,30 @@
 import WebSocket from 'ws';
 
 // Connects to the server and returns helpers to send and receive JSON messages.
+// Acknowledgements are kept apart from other messages: use next() for the
+// messages and nextAck() for acknowledgements.
 export function connect(port) {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(`ws://localhost:${port}`);
-    const received = []; // messages that arrived but nobody asked for yet
-    const waiting = [];  // callers waiting for the next message
+    const queues = { messages: [], acks: [] }; // arrived, but nobody asked yet
+    const waiting = { messages: [], acks: [] }; // callers waiting for the next one
+
+    function deliver(kind, message) {
+      const waiter = waiting[kind].shift();
+      if (waiter) waiter(message);
+      else queues[kind].push(message);
+    }
+
+    function take(kind) {
+      return new Promise((done) => {
+        if (queues[kind].length > 0) done(queues[kind].shift());
+        else waiting[kind].push(done);
+      });
+    }
 
     socket.on('message', (data) => {
       const message = JSON.parse(data.toString());
-      const waiter = waiting.shift();
-      if (waiter) waiter(message);
-      else received.push(message);
+      deliver(message.type === 'ack' ? 'acks' : 'messages', message);
     });
 
     socket.on('error', reject);
@@ -20,12 +33,8 @@ export function connect(port) {
       resolve({
         socket,
         send: (message) => socket.send(JSON.stringify(message)),
-        // Resolves with the next message (immediately if one is already queued).
-        next: () =>
-          new Promise((done) => {
-            if (received.length > 0) done(received.shift());
-            else waiting.push(done);
-          }),
+        next: () => take('messages'),
+        nextAck: () => take('acks'),
       }),
     );
   });

@@ -15,6 +15,10 @@ const routes = {
   '/crdt/id.js': { file: 'src/crdt/id.js', type: JS },
   '/crdt/lamport-clock.js': { file: 'src/crdt/lamport-clock.js', type: JS },
   '/crdt/rga-document.js': { file: 'src/crdt/rga-document.js', type: JS },
+  '/client/backoff.js': { file: 'src/client/backoff.js', type: JS },
+  '/client/outbox.js': { file: 'src/client/outbox.js', type: JS },
+  '/client/sync-client.js': { file: 'src/client/sync-client.js', type: JS },
+  '/crdt/operation-key.js': { file: 'src/crdt/operation-key.js', type: JS },
 };
 
 function reply(response, status, type, body) {

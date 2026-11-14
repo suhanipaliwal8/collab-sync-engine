@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { DocumentRoom } from '../../src/server/document-room.js';
 import { createLogger } from '../../src/server/logger.js';
 import { ROOT_ID } from '../../src/crdt/id.js';
+import { RgaDocument } from '../../src/crdt/rga-document.js';
 
 function fakeClient(id) {
   const client = {
@@ -201,4 +202,98 @@ test('operations are processed one at a time, in arrival order', async () => {
 
   assert.deepEqual(order, ['ins:1@alice', 'ins:2@alice']);
   assert.deepEqual(room.log, [first, second]);
+});
+
+// ---------- History and revert ----------
+
+// Types "cat", then changes it to "car" (5 operations in total).
+function catThenCar() {
+  const author = new RgaDocument('alice');
+  const ops = [...'cat'].map((ch, i) => author.localInsert(i, ch));
+  ops.push(author.localDelete(2)); // delete "t"
+  ops.push(author.localInsert(2, 'r'));
+  return ops;
+}
+
+async function feed(room, ops, sender = fakeClient('c1')) {
+  for (const op of ops) await room.receive(sender, op);
+}
+
+test('versionCount counts accepted operations, not duplicates', async () => {
+  const room = new DocumentRoom('doc');
+  const ops = catThenCar();
+  await feed(room, ops);
+  await room.receive(fakeClient('c1'), ops[0]); // duplicate
+  assert.equal(room.versionCount, 5);
+});
+
+test('textAt returns the text after any number of operations', async () => {
+  const room = new DocumentRoom('doc');
+  await feed(room, catThenCar());
+  assert.equal(room.textAt(0), '');
+  assert.equal(room.textAt(1), 'c');
+  assert.equal(room.textAt(3), 'cat');
+  assert.equal(room.textAt(4), 'ca');
+  assert.equal(room.textAt(5), 'car');
+});
+
+test('textAt throws a RangeError for unknown versions', async () => {
+  const room = new DocumentRoom('doc');
+  await feed(room, catThenCar());
+  assert.throws(() => room.textAt(6), RangeError);
+  assert.throws(() => room.textAt(-1), RangeError);
+  assert.throws(() => room.textAt(1.5), RangeError);
+});
+
+test('recentHistory returns the latest entries, oldest first', async () => {
+  const room = new DocumentRoom('doc');
+  await feed(room, catThenCar());
+  assert.deepEqual(room.recentHistory(2), [
+    { version: 4, type: 'delete', target: '3@alice' },
+    { version: 5, type: 'insert', id: '4@alice', siteId: 'alice', value: 'r' },
+  ]);
+});
+
+test('revertTo restores the old text with new operations and keeps the history', async () => {
+  const room = new DocumentRoom('doc');
+  const bob = fakeClient('c2');
+  room.join(bob);
+  await feed(room, catThenCar());
+
+  const result = await room.revertTo(3);
+
+  assert.equal(result.operations, 2); // delete "r", insert "t"
+  assert.equal(room.doc.getText(), 'cat');
+  assert.equal(room.versionCount, 7);
+  assert.equal(room.textAt(5), 'car'); // the old history is untouched
+  assert.equal(room.textAt(7), 'cat');
+  assert.equal(bob.messages.length, 1 + 5 + 2); // sync + 5 edits + 2 revert operations
+});
+
+test('reverting to the current version adds no operations', async () => {
+  const room = new DocumentRoom('doc');
+  await feed(room, catThenCar());
+  const result = await room.revertTo(5);
+  assert.equal(result.operations, 0);
+  assert.equal(room.versionCount, 5);
+});
+
+test('a failing store during a revert leaves the document unchanged', async () => {
+  let failing = false;
+  const store = {
+    async append() {
+      if (failing) throw new Error('db down');
+      return true;
+    },
+    async loadAll() {
+      return [];
+    },
+  };
+  const room = new DocumentRoom('doc', { store });
+  await feed(room, catThenCar());
+
+  failing = true;
+  await assert.rejects(room.revertTo(3), /db down/);
+  assert.equal(room.versionCount, 5);
+  assert.equal(room.doc.getText(), 'car');
 });

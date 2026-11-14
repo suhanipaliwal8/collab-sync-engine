@@ -10,13 +10,29 @@
       #status.ok { background: #c8f0d0; }
       #status.bad { background: #f5c6c6; }
       textarea { width: 100%; height: 50vh; box-sizing: border-box; padding: 0.75rem; font: 1rem/1.5 ui-monospace, monospace; }
+      #history-panel { margin-top: 1rem; padding: 1rem; border: 1px solid #bbb; border-radius: 8px; }
+      #history-slider { width: 100%; }
+      #history-preview { white-space: pre-wrap; border: 1px solid #ccc; padding: 0.75rem; min-height: 6rem; font: 1rem/1.5 ui-monospace, monospace; }
       small { color: #666; }
     </style>
   </head>
   <body>
     <h1>Collab Sync Engine</h1>
-    <p><span id="status">Connecting…</span></p>
+    <p>
+      <span id="status">Connecting…</span>
+      <button id="history-open" type="button" disabled>History</button>
+    </p>
     <textarea id="editor" placeholder="Start typing. Open this page in a second tab to see it sync." disabled></textarea>
+
+    <section id="history-panel" hidden>
+      <h2>History</h2>
+      <label for="history-slider">Version <output id="history-label">0 of 0</output></label>
+      <input id="history-slider" type="range" min="0" max="0" value="0" />
+      <pre id="history-preview"></pre>
+      <button id="history-restore" type="button">Restore this version</button>
+      <button id="history-close" type="button">Close</button>
+    </section>
+
     <p><small>Your site ID: <code id="site-id"></code></small></p>
     <script type="module" src="/client.js"></script>
   </body>

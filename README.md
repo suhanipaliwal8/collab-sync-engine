@@ -21,8 +21,9 @@ sync or CRDT libraries.
 - Phase 4: WebSocket server with live broadcast ✅
 - Phase 5: browser editor ✅ (+ phone fix)
 - Phase 6: PostgreSQL persistence, Docker, logging ✅
+- Phase 7: edit history, time travel and revert ✅
 
-**Tests: 84 passing**
+**Tests: 104 passing**
 
 ## Try it
 Requires Node.js LTS (22+) and Docker Desktop.
@@ -31,9 +32,9 @@ Requires Node.js LTS (22+) and Docker Desktop.
     npm run db:up      # starts PostgreSQL in Docker (port 5433)
     npm start
 
-Open http://localhost:8080 in two browser windows and type in both. The
-terminal prints a URL for other devices on the same Wi-Fi (e.g. your phone).
-Stop and restart the server: the document is still there.
+Open http://localhost:8080 in two browser windows and type in both. Click
+**History** to drag through every version of the document and restore one.
+The terminal prints a URL for other devices on the same Wi-Fi (e.g. your phone).
 
     npm run db:down    # stop the database (data is kept in a Docker volume)
 
@@ -48,53 +49,65 @@ The typed text is never written to the logs, only operation types and IDs.
 
 ## Architecture
     Browser tab (RgaDocument + textarea) ── WebSocket ── Sync server ── DocumentRoom ── PostgreSQL
-                                                  └─ same port also serves the page over HTTP
+                                          └─ HTTP: page + /api/history
 
-- **Shared code**: the exact same `src/crdt/*.js` modules run in the server and
-  in the browser.
+- **Shared code**: the same `src/crdt/*.js` modules run in the server and the browser.
 - **Local-first**: an edit is applied to the local document immediately, then
   sent to the server as an operation.
 - **Server = relay with a durable log**: it saves every operation to PostgreSQL
-  *before* broadcasting it, sends the full history to newcomers, broadcasts to
+  *before* broadcasting it, sends the full log to newcomers, broadcasts to
   everyone except the sender and ignores duplicates. Conflict resolution
   happens in the CRDT, not on the server.
 - **Append-only storage**: table `operations(seq, document_id, op_key, op JSONB,
-  created_at)`. `seq` is arrival order (used for history/revert);
-  `UNIQUE (document_id, op_key)` makes duplicate storage impossible.
-- **Ordered processing**: the room handles one operation at a time, so storage
-  order matches arrival order.
-- **Text box binding**: a textarea only reports its new full text, so
-  `src/client/text-diff.js` diffs old and new text into delete/insert
-  operations, and keeps the caret in place when remote edits arrive.
-- **Static files** are served from an allow-list of exact URLs.
-- `DocumentRoom` knows nothing about sockets or SQL (it receives a store and a
-  logger), and browser logic lives in pure, unit-tested functions.
+  created_at)`; `UNIQUE (document_id, op_key)` makes duplicate storage impossible.
+- **Ordered processing**: edits and reverts go through one queue, so they never interleave.
+- **Text box binding**: `src/client/text-diff.js` diffs old and new text into
+  delete/insert operations and keeps the caret in place (also used by the
+  server to generate revert operations).
+
+## History and revert
+- The operation log *is* the history. **Version N** = the document after the
+  first N operations (0 = empty). Viewing version N replays that prefix.
+- **Revert never rewrites history** (like `git revert`, not `git reset`): the
+  server compares the current text with the target version and adds *new*
+  operations (as site `server`) that turn one into the other. They are saved
+  and broadcast like any edit, so a revert can itself be reverted.
+- Deleted characters are tombstones and cannot be undeleted, so restored text
+  is re-inserted as new characters.
+
+| Endpoint / message | Meaning |
+|---|---|
+| `GET /api/history?limit=50` | `{ count, entries: [...] }` most recent entries |
+| `GET /api/history/:version` | `{ version, count, text }` (400 invalid, 404 unknown) |
+| WebSocket `{ type: "revert", version }` | revert to a version |
+| WebSocket `{ type: "reverted", version, operations }` | answer to the requester |
+
+The history preview is rendered with `textContent` (never `innerHTML`), because
+the text was typed by other people.
 
 ## Protocol (JSON over WebSocket)
 | Direction | Message |
 |---|---|
 | client → server | `{ "type": "op", "op": <insert or delete> }` |
+| client → server | `{ "type": "revert", "version": <int> }` |
 | server → client | `{ "type": "sync", "ops": [...] }` sent on connect |
-| server → client | `{ "type": "op", "op": <insert or delete> }` another client's edit |
-| server → client | `{ "type": "error", "message": "..." }` invalid input or save failure |
+| server → client | `{ "type": "op", "op": <insert or delete> }` an edit (including revert operations) |
+| server → client | `{ "type": "reverted", ... }` / `{ "type": "error", "message": "..." }` |
 
 Insert: `{ type: "insert", id, parentId, value }`. Delete: `{ type: "delete", targetId }`.
 Incoming messages are validated and sanitized (`src/server/protocol.js`).
 
 ## Core concepts
 - **Site**: one client's replica of the document (each browser tab is a site).
-- **Character ID**: `{ counter, siteId }`, unique and totally ordered, so edits
-  target characters instead of shifting positions.
-- **Lamport clock**: a logical counter (not wall-clock time) that guarantees an
-  operation created after seeing another has a larger ID.
+- **Character ID**: `{ counter, siteId }`, unique and totally ordered.
+- **Lamport clock**: a logical counter guaranteeing an operation created after
+  seeing another has a larger ID.
 - **RGA (Replicated Growable Array)**: a sequence CRDT. Each insert says "put
-  this character after character X". Concurrent inserts after the same parent
-  are ordered by ID (bigger ID first), so every site picks the same order.
-- **Tombstones**: deleted characters are hidden, not removed, so later
-  operations can still refer to them.
+  this character after character X"; concurrent inserts after the same parent
+  are ordered by ID (bigger first), so every site picks the same order.
+- **Tombstones**: deleted characters are hidden, not removed.
 - **Idempotency**: applying the same operation twice changes nothing.
-- **Causal buffering**: an operation whose dependency hasn't arrived waits in a
-  pending list and is applied later.
+- **Causal buffering**: an operation whose dependency hasn't arrived waits.
 
 ## How convergence is tested
 Convergence means: any two sites that have received the same set of
@@ -102,40 +115,32 @@ operations end in the same state, whatever the delivery order and even with
 duplicates.
 1. **Exhaustive**: 6 operations (3 concurrent) delivered in all 720 orders.
 2. **Duplicates**: every operation delivered twice in shuffled order.
-3. **Randomized simulation**: 2, 3 and 5 sites make random edits while messages
-   arrive late, out of order or duplicated. Runs are seeded, so any failure
-   can be reproduced from its seed.
-4. **Over a real network**: two clients edit through the WebSocket server and
-   end with identical text.
+3. **Randomized simulation**: 2, 3 and 5 sites, seeded and reproducible.
+4. **Over a real network**: two clients edit through the WebSocket server.
 
 Replicas are compared by full internal state (including tombstones). These
 tests are strong evidence of convergence, not a mathematical proof.
 
 ## Project structure
-    src/crdt/        IDs, Lamport clock, RGA document (shared with the browser)
+    src/crdt/        IDs, Lamport clock, RGA document, history helpers (shared with the browser)
     src/client/      text diff, caret logic, site ID (shared with the browser)
-    src/server/      protocol, DocumentRoom, operation store, logger, HTTP + WebSocket server
+    src/server/      protocol, DocumentRoom, operation store, API, logger, HTTP + WebSocket server
     public/          index.html and client.js (browser glue)
     docker-compose.yml   PostgreSQL for development
     test/            unit, convergence and integration tests
-    test/helpers/    seeded random, simulation, WebSocket test client
 
 ## Testing
 Database tests need PostgreSQL running (`npm run db:up`); CI starts one as a
-service container. Tests use their own document IDs and clean up after
-themselves, so your development data is not touched.
+service container. Tests use their own document IDs and clean up after themselves.
 
     npm test
 
-## Opening it from a phone
-Use the Wi-Fi URL printed at startup. Plain `http://` pages are not "secure
-contexts", so browser code must avoid APIs such as `crypto.randomUUID()`;
-site IDs use `crypto.getRandomValues` instead.
-
 ## Known limitations
 - After a disconnect the page must be reloaded (Phase 8).
-- The whole log is kept in memory and re-sent to each newcomer (no snapshots).
+- Viewing a version replays operations (no snapshots), and the whole log is kept in memory.
+- A revert is several operations; a database failure midway could leave it partial (transaction planned).
+- Delete operations don't record who deleted; history shows authorship for inserts only.
 - Single document ("default"); no authentication or rate limiting yet (Phase 9).
 
 ## Roadmap
-History and revert → offline/reconnect → hardening → presence.
+Offline/reconnect → hardening (auth, limits, latency) → presence.

@@ -1,5 +1,7 @@
 import { RgaDocument } from '../crdt/rga-document.js';
+import { buildDocument, textAtVersion } from '../crdt/history.js';
 import { idToString } from '../crdt/id.js';
+import { diffText, applyChangeToDocument } from '../client/text-diff.js';
 import { silentLogger } from './logger.js';
 
 // One shared document. Knows nothing about WebSockets: a "client" is any
@@ -10,10 +12,15 @@ export class DocumentRoom {
     this.store = store;
     this.logger = logger;
     this.doc = new RgaDocument('server'); // the server's own replica
-    this.log = [];                        // every operation, in arrival order
+    this.log = [];                        // every operation, in arrival order = the history
     this.seen = new Set();                // keys of operations already accepted
     this.clients = new Set();
     this.queue = Promise.resolve();       // operations are processed one at a time
+  }
+
+  // Number of operations in the history. Version N = state after N operations.
+  get versionCount() {
+    return this.log.length;
   }
 
   // Loads saved history. Call once, before accepting clients.
@@ -44,11 +51,53 @@ export class DocumentRoom {
     }
   }
 
+  // ---------- History ----------
+
+  // The document text after the first `version` operations. Throws RangeError if unknown.
+  textAt(version) {
+    return textAtVersion(this.log, version);
+  }
+
+  // The most recent `limit` history entries, oldest first.
+  recentHistory(limit = 50) {
+    const start = Math.max(0, this.log.length - limit);
+    return this.log.slice(start).map((op, index) => historyEntry(op, start + index + 1));
+  }
+
+  // Restores the text of an earlier version by adding NEW operations (history is never
+  // rewritten). Resolves to { operations: <how many were added> }.
+  revertTo(version) {
+    return this._enqueue(() => this._revert(version));
+  }
+
+  async _revert(version) {
+    const target = textAtVersion(this.log, version); // throws RangeError for unknown versions
+
+    // Generate the operations on a private copy, so a failure can't leave the live replica half-changed.
+    const scratch = buildDocument(this.log, 'server');
+    const change = diffText(scratch.getText(), target);
+    const ops = applyChangeToDocument(scratch, change);
+
+    for (const op of ops) await this._process(null, op); // save + broadcast to everyone
+
+    this.logger.info(
+      `reverted "${this.documentId}" to version ${version} (${ops.length} new operation(s))`,
+    );
+    return { operations: ops.length };
+  }
+
+  // ---------- Edits ----------
+
   // Resolves to true if the operation was new, false if it was a duplicate.
   // Rejects if saving failed (nothing is broadcast in that case).
   receive(sender, op) {
-    const run = this.queue.then(() => this._process(sender, op));
-    this.queue = run.catch(() => {}); // one failure must not block later operations
+    return this._enqueue(() => this._process(sender, op));
+  }
+
+  // Runs jobs strictly one after another, in the order they were requested.
+  _enqueue(job) {
+    const run = this.queue.then(job);
+    this.queue = run.catch(() => {}); // one failure must not block later jobs
     return run;
   }
 
@@ -80,6 +129,7 @@ export class DocumentRoom {
 }
 
 function label(client) {
+  if (!client) return 'the server';
   return client.id ?? 'a client';
 }
 
@@ -89,9 +139,16 @@ function operationKey(op) {
     : `del:${idToString(op.targetId)}`;
 }
 
-// Deliberately shows IDs only, never the typed character.
+// Deliberately shows IDs only, never the typed character (this is for logs).
 function describeOperation(op) {
   return op.type === 'insert'
     ? `insert ${idToString(op.id)} after ${idToString(op.parentId)}`
     : `delete ${idToString(op.targetId)}`;
+}
+
+// What the history API shows for one operation.
+function historyEntry(op, version) {
+  return op.type === 'insert'
+    ? { version, type: 'insert', id: idToString(op.id), siteId: op.id.siteId, value: op.value }
+    : { version, type: 'delete', target: idToString(op.targetId) };
 }

@@ -35,8 +35,8 @@ function cleanOperation(op) {
   return null;
 }
 
-// Parses a raw text message. Returns { type: 'op', op } or throws an Error
-// whose message is safe to send back to the client.
+// Parses a raw text message. Returns { type: 'op', op } or { type: 'revert', version },
+// or throws an Error whose message is safe to send back to the client.
 export function parseClientMessage(raw) {
   let message;
   try {
@@ -45,7 +45,18 @@ export function parseClientMessage(raw) {
     throw new Error('Message is not valid JSON');
   }
 
-  if (typeof message !== 'object' || message === null || message.type !== 'op') {
+  if (typeof message !== 'object' || message === null) {
+    throw new Error('Unknown message type');
+  }
+
+  if (message.type === 'revert') {
+    if (!Number.isSafeInteger(message.version) || message.version < 0) {
+      throw new Error('Invalid version');
+    }
+    return { type: 'revert', version: message.version };
+  }
+
+  if (message.type !== 'op') {
     throw new Error('Unknown message type');
   }
 

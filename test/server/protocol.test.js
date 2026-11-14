@@ -46,3 +46,23 @@ test('strips unexpected extra fields', () => {
   };
   assert.deepEqual(parseClientMessage(JSON.stringify(dirty)), validInsert);
 });
+
+test('accepts a valid revert message', () => {
+  assert.deepEqual(parseClientMessage(JSON.stringify({ type: 'revert', version: 3, junk: 1 })), {
+    type: 'revert',
+    version: 3,
+  });
+});
+
+test('rejects a revert with a negative or fractional version', () => {
+  for (const version of [-1, 1.5, '3', null]) {
+    assert.throws(
+      () => parseClientMessage(JSON.stringify({ type: 'revert', version })),
+      /Invalid version/,
+    );
+  }
+});
+
+test('rejects a revert without a version', () => {
+  assert.throws(() => parseClientMessage(JSON.stringify({ type: 'revert' })), /Invalid version/);
+});

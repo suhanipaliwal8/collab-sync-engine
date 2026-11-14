@@ -19,20 +19,34 @@ sync or CRDT libraries.
 - Phase 2: RGA insert/delete + CI ✅
 - Phase 3: convergence tests ✅
 - Phase 4: WebSocket server with live broadcast ✅
+- Phase 5: browser editor ✅
 
-**Tests: 50 passing**
+**Tests: 66 passing**
+
+## Try it
+    npm install
+    npm start
+
+Open http://localhost:8080 in two browser windows and type in both.
 
 ## Architecture
-    Client A ──┐                          ┌── Client B
-               └── WebSocket ── Sync server ──┘
-                               └─ DocumentRoom: operation log + server replica
+    Browser tab (RgaDocument + textarea) ── WebSocket ── Sync server ── DocumentRoom
+                                                  └─ same port also serves the page over HTTP
 
-- `DocumentRoom` knows nothing about sockets (a client is anything with a
-  `send()` method), so it is unit-tested with fake clients.
-- The server is a relay with a memory: it logs every operation, sends the full
-  log to newcomers, broadcasts each new operation to everyone except its
-  sender, and ignores duplicates. Conflict resolution happens in the CRDT, not
-  on the server.
+- **Shared code**: the exact same `src/crdt/*.js` modules run in the server and
+  in the browser.
+- **Local-first**: an edit is applied to the local document immediately, then
+  sent to the server as an operation.
+- **Server = relay with a memory**: it logs every operation, sends the full log
+  to newcomers, broadcasts each new operation to everyone except its sender and
+  ignores duplicates. Conflict resolution happens in the CRDT, not on the server.
+- **Text box binding**: a textarea only reports its new full text, so
+  `src/client/text-diff.js` diffs old and new text into delete/insert
+  operations, and keeps the caret in place when remote edits arrive.
+- **Static files** are served from an allow-list of exact URLs (no path built
+  from user input).
+- `DocumentRoom` knows nothing about sockets, and browser logic lives in pure,
+  unit-tested functions; `public/client.js` is only thin glue.
 
 ## Protocol (JSON over WebSocket)
 | Direction | Message |
@@ -46,7 +60,7 @@ Insert: `{ type: "insert", id, parentId, value }`. Delete: `{ type: "delete", ta
 Incoming messages are validated and sanitized (`src/server/protocol.js`).
 
 ## Core concepts
-- **Site**: one client's replica of the document.
+- **Site**: one client's replica of the document (each browser tab is a site).
 - **Character ID**: `{ counter, siteId }`, unique and totally ordered, so edits
   target characters instead of shifting positions.
 - **Lamport clock**: a logical counter (not wall-clock time) that guarantees an
@@ -76,8 +90,10 @@ Replicas are compared by full internal state (including tombstones). These
 tests are strong evidence of convergence, not a mathematical proof.
 
 ## Project structure
-    src/crdt/        IDs, Lamport clock, RGA document
-    src/server/      protocol validation, DocumentRoom, WebSocket server
+    src/crdt/        IDs, Lamport clock, RGA document (shared with the browser)
+    src/client/      text diff + caret logic (shared with the browser)
+    src/server/      protocol validation, DocumentRoom, HTTP + WebSocket server
+    public/          index.html and client.js (browser glue)
     test/            unit, convergence and integration tests
     test/helpers/    seeded random, simulation, WebSocket test client
 
@@ -86,8 +102,12 @@ Requires a recent Node.js LTS (22+).
 
     npm install
     npm test
-    npm start        # ws://localhost:8080 (set PORT to change)
+    npm start        # http://localhost:8080 (set PORT to change)
+
+## Known limitations
+- The log is in memory: restarting the server loses the document (Phase 6).
+- After a disconnect the page must be reloaded (Phase 8).
+- No authentication or rate limiting yet (Phase 9).
 
 ## Roadmap
-Browser client → PostgreSQL history (Docker) → revert → offline/reconnect →
-hardening → presence.
+PostgreSQL history (Docker) → revert → offline/reconnect → hardening → presence.

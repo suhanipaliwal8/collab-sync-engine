@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Collab Sync Engine</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+      #status { display: inline-block; padding: 0.15rem 0.6rem; border-radius: 999px; font-size: 0.85rem; background: #ddd; color: #222; }
+      #status.ok { background: #c8f0d0; }
+      #status.bad { background: #f5c6c6; }
+      textarea { width: 100%; height: 50vh; box-sizing: border-box; padding: 0.75rem; font: 1rem/1.5 ui-monospace, monospace; }
+      small { color: #666; }
+    </style>
+  </head>
+  <body>
+    <h1>Collab Sync Engine</h1>
+    <p><span id="status">Connecting…</span></p>
+    <textarea id="editor" placeholder="Start typing. Open this page in a second tab to see it sync." disabled></textarea>
+    <p><small>Your site ID: <code id="site-id"></code></small></p>
+    <script type="module" src="/client.js"></script>
+  </body>
+</html>

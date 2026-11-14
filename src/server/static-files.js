@@ -11,6 +11,7 @@ const routes = {
   '/': { file: 'public/index.html', type: 'text/html; charset=utf-8' },
   '/client.js': { file: 'public/client.js', type: JS },
   '/client/text-diff.js': { file: 'src/client/text-diff.js', type: JS },
+  '/client/site-id.js': { file: 'src/client/site-id.js', type: JS },
   '/crdt/id.js': { file: 'src/crdt/id.js', type: JS },
   '/crdt/lamport-clock.js': { file: 'src/crdt/lamport-clock.js', type: JS },
   '/crdt/rga-document.js': { file: 'src/crdt/rga-document.js', type: JS },

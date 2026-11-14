@@ -6,12 +6,16 @@ import {
   utf16ToCodePointIndex,
   codePointToUtf16Index,
 } from './client/text-diff.js';
+import { createSiteId } from './client/site-id.js';
 
 const textarea = document.querySelector('#editor');
 const statusLabel = document.querySelector('#status');
+// On a phone there are no developer tools, so show unexpected errors on the page.
+window.addEventListener('error', (event) => setStatus(`Error: ${event.message}`, 'bad'));
+window.addEventListener('unhandledrejection', (event) => setStatus(`Error: ${event.reason}`, 'bad'));
 
 // Every browser tab is its own "site" with its own unique ID.
-const siteId = `u-${crypto.randomUUID().slice(0, 8)}`;
+const siteId = createSiteId();
 const doc = new RgaDocument(siteId);
 document.querySelector('#site-id').textContent = siteId;
 

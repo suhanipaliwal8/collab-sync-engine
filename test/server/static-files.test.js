@@ -39,6 +39,7 @@ test('serves every browser module as JavaScript', options, async () => {
     const paths = [
       '/client.js',
       '/client/text-diff.js',
+      '/client/site-id.js',
       '/crdt/id.js',
       '/crdt/lamport-clock.js',
       '/crdt/rga-document.js',

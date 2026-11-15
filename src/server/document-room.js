@@ -1,6 +1,7 @@
 import { RgaDocument } from '../crdt/rga-document.js';
 import { buildDocument, textAtVersion } from '../crdt/history.js';
-import { idToString } from '../crdt/id.js';
+import { ROOT_ID, idToString, idsEqual } from '../crdt/id.js';
+import { InvalidOperationError } from './errors.js';
 import { diffText, applyChangeToDocument } from '../client/text-diff.js';
 import { silentLogger } from './logger.js';
 import { operationKey } from '../crdt/operation-key.js';
@@ -111,6 +112,11 @@ export class DocumentRoom {
       return false;
     }
 
+    if (!this._hasDependencies(op)) {
+      this.logger.warn(`rejected ${description} from ${label(sender)}: refers to an unknown character`);
+      throw new InvalidOperationError('Operation refers to a character this document does not have');
+    }
+
     if (this.store) await this.store.append(this.documentId, key, op); // saved before anyone sees it
 
     this.seen.add(key);
@@ -127,7 +133,16 @@ export class DocumentRoom {
     this.logger.debug(`${description} from ${label(sender)} → sent to ${recipients} other client(s)`);
     return true;
   }
+
+  // Honest clients only build on characters the server already has. Anything else is
+  // refused instead of being stored forever as an operation that can never apply.
+  _hasDependencies(op) {
+    if (op.type === 'delete') return this.doc.hasNode(op.targetId);
+    return idsEqual(op.parentId, ROOT_ID) || this.doc.hasNode(op.parentId);
+  }
 }
+
+
 
 function label(client) {
   if (!client) return 'the server';

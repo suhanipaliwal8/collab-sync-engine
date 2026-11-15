@@ -3,9 +3,10 @@ import WebSocket from 'ws';
 // Connects to the server and returns helpers to send and receive JSON messages.
 // Acknowledgements are kept apart from other messages: use next() for the
 // messages and nextAck() for acknowledgements.
-export function connect(port) {
+// Options: path (e.g. '/?doc=notes&token=abc') and extra request headers.
+export function connect(port, { path = '/', headers = {} } = {}) {
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(`ws://localhost:${port}`);
+    const socket = new WebSocket(`ws://localhost:${port}${path}`, { headers });
     const queues = { messages: [], acks: [] }; // arrived, but nobody asked yet
     const waiting = { messages: [], acks: [] }; // callers waiting for the next one
 

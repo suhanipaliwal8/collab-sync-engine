@@ -7,6 +7,7 @@ npm start                      # terminal 1
 # open http://localhost:8080/?doc=demo in two browser windows
 npm run demo                   # terminal 2: two bots type, one goes offline and comes back
 ```
+The demo keeps appending to the same document. For a clean recording use a new name: `npm run demo -- my-fresh-doc` and open `?doc=my-fresh-doc`.
 
 ## A two-minute script for a recording
 

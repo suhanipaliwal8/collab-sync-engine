@@ -1,11 +1,12 @@
 import WebSocket from 'ws';
 import { SyncClient } from '../src/client/sync-client.js';
-import { diffText } from '../src/client/text-diff.js';
 
 // Two bots type into the same document so you can watch the system work in a browser:
 //   1. npm run db:up && npm start
 //   2. open http://localhost:8080/?doc=demo in a browser
-//   3. npm run demo            (re-running adds more lines: the History slider shows it all)
+//   3. npm run demo
+// The document keeps its history: running the demo again appends to the same document.
+// For a clean document pass another name:  npm run demo -- my-fresh-doc
 const documentId = process.argv[2] || 'demo';
 const port = Number(process.env.PORT) || 8080;
 const token = process.env.ACCESS_TOKEN;
@@ -35,12 +36,17 @@ function makeBot(label) {
   return bot;
 }
 
-// Types one line at the end of the bot's text, one character at a time, moving its cursor.
+// Types one line, one character at a time. The first character goes at the end of the
+// document; every following character goes right after the previous one THIS bot typed,
+// like a person typing in their own spot. That keeps the two bots' lines from being mixed
+// letter by letter (see "Known limitations" in the README).
 async function typeLine(bot, line) {
+  let lastId = null;
   for (const char of line) {
-    const text = bot.text;
-    bot.edit(diffText(text, text + char));
-    bot.updatePresence({ name: bot.label, start: Array.from(bot.text).length });
+    const index = lastId ? bot.doc.indexOfAnchor(lastId) : Array.from(bot.text).length;
+    const [op] = bot.edit({ index, removed: [], inserted: [char] });
+    lastId = op.id;
+    bot.updatePresence({ name: bot.label, start: index + 1 });
     await sleep(TYPING_DELAY_MS);
   }
 }
@@ -52,8 +58,7 @@ const bob = makeBot('Bob');
 alice.connect();
 bob.connect();
 await waitUntil(() => alice.status === 'online' && bob.status === 'online', 'both bots to connect');
-alice.updatePresence({ name: alice.label, start: Array.from(alice.text).length });
-bob.updatePresence({ name: bob.label, start: Array.from(bob.text).length });
+log(`watching document "${documentId}": open http://localhost:${port}/?doc=${documentId}`);
 
 log('1/3 Alice and Bob type at the same time (concurrent edits)');
 await Promise.all([

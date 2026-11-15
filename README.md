@@ -180,6 +180,9 @@ built-in `node:test` runner. No CRDT, sync, framework or UI libraries.
 - Presence is a list; there are no coloured carets inside the text box.
 - A paste larger than 5000 characters is delivered over several reconnects (rate limit).
 - Single server process; scaling out needs routing by document and a pub/sub layer.
+- Two people typing at the *same position at the same moment* can end up with their characters
+  mixed together letter by letter. All replicas still show the identical text (convergence holds),
+  but it may read oddly; newer algorithms (for example Fugue) are designed to reduce this.
 
 ## What I learned
 

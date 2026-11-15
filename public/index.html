@@ -23,6 +23,10 @@
       <button id="offline-toggle" type="button" disabled>Simulate offline</button>
       <button id="history-open" type="button" disabled>History</button>
     </p>
+    <form id="doc-form">
+      <label>Document <input id="doc-name" maxlength="64" pattern="[A-Za-z0-9_\-]+" required /></label>
+      <button type="submit">Open</button>
+    </form>
     <textarea id="editor" placeholder="Start typing. Open this page in a second tab to see it sync." disabled></textarea>
 
     <section id="history-panel" hidden>

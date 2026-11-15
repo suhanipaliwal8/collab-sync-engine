@@ -7,6 +7,8 @@ import { getDatabaseUrl } from './config.js';
 // LOG_LEVEL can be debug, info, warn or error. Debug also shows every operation.
 const logger = createLogger({ level: process.env.LOG_LEVEL ?? 'debug' });
 const port = Number(process.env.PORT) || 8080;
+// When set, WebSocket clients and the history API must present this token.
+const accessToken = process.env.ACCESS_TOKEN || null;
 
 const store = new OperationStore({ connectionString: getDatabaseUrl(), logger });
 try {
@@ -17,9 +19,14 @@ try {
 }
 logger.info('connected to PostgreSQL');
 
-const server = await startSyncServer({ port, store, logger });
+const server = await startSyncServer({ port, store, logger, authToken: accessToken });
 
-logger.info(`Open on this computer: http://localhost:${server.port}`);
+logger.info(
+  accessToken
+    ? 'access control: ON (open the page with ?token=<your token>)'
+    : 'access control: OFF (set ACCESS_TOKEN to require a token)',
+);
+logger.info(`Open on this computer: http://localhost:${server.port}  (add ?doc=name for another document)`);
 for (const address of lanAddresses()) {
   logger.info(`Other devices on the same Wi-Fi: http://${address}:${server.port}`);
 }

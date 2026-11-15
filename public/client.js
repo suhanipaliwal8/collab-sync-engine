@@ -6,10 +6,15 @@ import {
   codePointToUtf16Index,
 } from './client/text-diff.js';
 import { createSiteId } from './client/site-id.js';
+import { lineAndColumn, peerColor } from './client/presence.js';
+import { throttle } from './client/throttle.js';
 
 const textarea = document.querySelector('#editor');
 const statusLabel = document.querySelector('#status');
 const offlineToggle = document.querySelector('#offline-toggle');
+const peerList = document.querySelector('#peer-list');
+const displayNameInput = document.querySelector('#display-name');
+
 // Which document to open, and the optional access token, come from the page URL:
 //   http://localhost:8080/?doc=notes&token=secret
 const pageParams = new URLSearchParams(location.search);
@@ -30,16 +35,28 @@ const historyClose = document.querySelector('#history-close');
 
 function setStatus(text, kind) {
   statusLabel.textContent = text;
-  statusLabel.className = kind;
+  statusLabel.className = kind ? `pill ${kind}` : 'pill';
 }
 
-function safeSessionStorage() {
+function safeStorage(kind) {
   try {
-    return window.sessionStorage;
+    return window[kind];
   } catch {
     return null; // storage can be blocked by browser privacy settings
   }
 }
+
+// ---------- Your display name ----------
+
+const siteId = createSiteId(); // a fresh site ID per page load, so IDs can never collide
+const savedName = safeStorage('localStorage')?.getItem('collab-name');
+displayNameInput.value = savedName || `Guest-${siteId.slice(2, 6)}`;
+
+function currentName() {
+  return displayNameInput.value.trim() || `Guest-${siteId.slice(2, 6)}`;
+}
+
+// ---------- The document ----------
 
 // Show the document's text in the textarea, keeping the user's caret in place.
 function render() {
@@ -58,6 +75,61 @@ function render() {
   );
 }
 
+// ---------- Who is here ----------
+
+function renderPeers() {
+  peerList.replaceChildren();
+
+  const addNote = (text) => {
+    const item = document.createElement('li');
+    item.className = 'empty';
+    item.textContent = text;
+    peerList.append(item);
+  };
+
+  if (client.status !== 'online') {
+    addNote('Presence is unavailable while offline');
+    return;
+  }
+
+  const peers = client.peers;
+  if (peers.length === 0) {
+    addNote('Nobody else is here');
+    return;
+  }
+
+  const text = client.text;
+  for (const peer of peers) {
+    let where = 'no cursor yet';
+    if (peer.start !== null) {
+      const { line, column } = lineAndColumn(text, peer.start);
+      const selected = peer.end === null ? 0 : Math.abs(peer.end - peer.start);
+      where = selected > 0 ? `selecting ${selected} characters (line ${line})` : `line ${line}, column ${column}`;
+    }
+
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    dot.style.background = peerColor(peer.id);
+
+    const label = document.createElement('span');
+    label.textContent = `${peer.name} · ${where}`; // textContent: names come from other people
+
+    const item = document.createElement('li');
+    item.append(dot, label);
+    peerList.append(item);
+  }
+}
+
+// Tell the others where our cursor is (at most 10 times per second).
+function sendMyPresence() {
+  const start = utf16ToCodePointIndex(textarea.value, textarea.selectionStart);
+  const end = utf16ToCodePointIndex(textarea.value, textarea.selectionEnd);
+  client.updatePresence({ name: currentName(), start, end });
+}
+const sendMyPresenceSoon = throttle(sendMyPresence, 100);
+
+// ---------- Connection status ----------
+
 let wasReady = false;
 
 function showStatus({ status, unsent }) {
@@ -75,8 +147,11 @@ function showStatus({ status, unsent }) {
   offlineToggle.disabled = !ready;
   historyOpen.disabled = status !== 'online';
   offlineToggle.textContent = client.paused ? 'Go online' : 'Simulate offline';
+  offlineToggle.classList.toggle('warn', client.paused);
   if (ready && !wasReady) textarea.focus();
   wasReady = ready;
+
+  renderPeers();
 }
 
 function showNotice(message) {
@@ -96,24 +171,43 @@ function showNotice(message) {
 
 const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
 const client = new SyncClient({
-  siteId: createSiteId(), // a fresh site ID per page load, so IDs can never collide
+  siteId,
   createSocket: () => {
     const query = new URLSearchParams({ doc: documentId });
     if (accessToken) query.set('token', accessToken);
     return new WebSocket(`${scheme}://${location.host}/?${query}`);
   },
-  storage: safeSessionStorage(),
+  storage: safeStorage('sessionStorage'),
   storageKey: `collab-outbox:${documentId}`, // one outbox per document
-  onChange: render,
+  onChange: () => {
+    render();
+    renderPeers(); // remote cursors move when the text changes
+  },
   onStatus: showStatus,
   onNotice: showNotice,
+  onPresence: renderPeers,
 });
-document.querySelector('#site-id').textContent = client.doc.siteId;
+document.querySelector('#site-id').textContent = siteId;
 client.connect();
+
+// ---------- Typing, cursor and name ----------
 
 // The user typed, pasted or deleted something.
 textarea.addEventListener('input', () => {
   client.edit(diffText(client.text, textarea.value));
+  sendMyPresenceSoon();
+});
+
+for (const eventName of ['keyup', 'click', 'focus']) {
+  textarea.addEventListener(eventName, sendMyPresenceSoon);
+}
+document.addEventListener('selectionchange', () => {
+  if (document.activeElement === textarea) sendMyPresenceSoon();
+});
+
+displayNameInput.addEventListener('change', () => {
+  safeStorage('localStorage')?.setItem('collab-name', currentName());
+  sendMyPresence();
 });
 
 offlineToggle.addEventListener('click', () => {

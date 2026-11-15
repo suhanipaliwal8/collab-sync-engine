@@ -46,6 +46,11 @@ export class RgaDocument {
       .join('');
   }
 
+  // True if a character with this id exists (deleted ones count: they are tombstones).
+  hasNode(id) {
+    return this.index.has(idToString(id));
+  }
+
   // ---------- Internals ----------
 
   // Returns true if applied (or already applied), false if a dependency is missing.

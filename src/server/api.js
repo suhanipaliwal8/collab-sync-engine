@@ -1,4 +1,6 @@
 import { handleHttpRequest as serveStaticFile } from './static-files.js';
+import { extractToken } from './auth.js';
+import { ClientError } from './errors.js';
 
 function sendJson(response, status, data) {
   response.writeHead(status, {
@@ -8,10 +10,11 @@ function sendJson(response, status, data) {
   response.end(JSON.stringify(data));
 }
 
-// Returns the function that handles every HTTP request: /api/... goes to the
-// history endpoints, everything else to the static file allow-list.
-export function createHttpHandler(room) {
-  return function handleRequest(request, response) {
+// Returns the function that handles every HTTP request: /api/... goes to the history
+// endpoints (token-protected when access control is on), everything else to the static
+// file allow-list. The document is chosen with ?doc=name (default: the server's default).
+export function createHttpHandler({ rooms, auth, defaultDocumentId }) {
+  return async function handleRequest(request, response) {
     try {
       const { pathname, searchParams } = new URL(request.url, 'http://localhost');
 
@@ -22,6 +25,20 @@ export function createHttpHandler(room) {
 
       if (request.method !== 'GET') {
         sendJson(response, 405, { error: 'Method not allowed' });
+        return;
+      }
+
+      if (!auth.isAllowed(extractToken(request.headers, searchParams))) {
+        sendJson(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+
+      let room;
+      try {
+        room = await rooms.get(searchParams.get('doc') ?? defaultDocumentId);
+      } catch (error) {
+        if (!(error instanceof ClientError)) throw error;
+        sendJson(response, error.status, { error: error.message });
         return;
       }
 

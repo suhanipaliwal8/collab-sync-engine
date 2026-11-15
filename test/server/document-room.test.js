@@ -4,6 +4,7 @@ import { DocumentRoom } from '../../src/server/document-room.js';
 import { createLogger } from '../../src/server/logger.js';
 import { ROOT_ID } from '../../src/crdt/id.js';
 import { RgaDocument } from '../../src/crdt/rga-document.js';
+import { InvalidOperationError } from '../../src/server/errors.js';
 
 function fakeClient(id) {
   const client = {
@@ -296,4 +297,26 @@ test('a failing store during a revert leaves the document unchanged', async () =
   await assert.rejects(room.revertTo(3), /db down/);
   assert.equal(room.versionCount, 5);
   assert.equal(room.doc.getText(), 'car');
+});
+
+test('rejects an insert whose parent does not exist, and stores nothing', async () => {
+  const store = fakeStore();
+  const room = new DocumentRoom('doc', { store });
+  const bob = fakeClient('c2');
+  room.join(bob);
+
+  await assert.rejects(
+    room.receive(fakeClient('c1'), insert(5, 'alice', { counter: 4, siteId: 'alice' }, 'x')),
+    InvalidOperationError,
+  );
+  assert.equal(room.versionCount, 0);
+  assert.equal(store.appended.length, 0);
+  assert.equal(bob.messages.length, 1); // only the sync: nothing was broadcast
+});
+
+test('rejects a delete of a character that does not exist', async () => {
+  const room = new DocumentRoom('doc');
+  const op = { type: 'delete', targetId: { counter: 1, siteId: 'ghost' } };
+  await assert.rejects(room.receive(fakeClient('c1'), op), InvalidOperationError);
+  assert.equal(room.versionCount, 0);
 });

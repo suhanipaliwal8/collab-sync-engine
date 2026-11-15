@@ -128,3 +128,12 @@ test('receiving a remote op moves the local clock forward', () => {
   const op = doc.localInsert(1, 'y');
   assert.equal(op.id.counter, 11);
 });
+
+test('hasNode knows every character, including deleted ones', () => {
+  const doc = new RgaDocument('A');
+  const op = doc.localInsert(0, 'x');
+  assert.equal(doc.hasNode(op.id), true);
+  doc.localDelete(0);
+  assert.equal(doc.hasNode(op.id), true);
+  assert.equal(doc.hasNode({ counter: 99, siteId: 'Z' }), false);
+});

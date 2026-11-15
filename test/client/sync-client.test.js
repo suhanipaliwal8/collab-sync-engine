@@ -219,3 +219,35 @@ test('random disconnects while two clients type never lose or duplicate an edit'
     });
   }
 });
+
+test('an operation the server rejects is dropped from the outbox instead of being retried forever', options, () =>
+  withServer(async ({ server, make }) => {
+    const storage = fakeStorage();
+    new Outbox(storage).add({
+      type: 'insert',
+      id: { counter: 9, siteId: 'ghost' },
+      parentId: { counter: 8, siteId: 'ghost' }, // this character never existed
+      value: 'x',
+    });
+
+    const client = make('alice', { storage });
+    assert.equal(client.unsentCount, 1);
+    client.connect();
+
+    await waitFor(() => online(client) && client.unsentCount === 0, 'the rejected operation to be dropped');
+    assert.equal(server.room.versionCount, 0);
+  }));
+
+test('outboxes of different documents never mix', () => {
+  const storage = fakeStorage();
+  const offline = () => {
+    throw new Error('never connects');
+  };
+  const notes = new SyncClient({ siteId: 'a', createSocket: offline, storage, storageKey: 'collab-outbox:notes' });
+  setText(notes, 'n'); // saved in the "notes" outbox
+
+  const todo = new SyncClient({ siteId: 'b', createSocket: offline, storage, storageKey: 'collab-outbox:todo' });
+  const notesAgain = new SyncClient({ siteId: 'c', createSocket: offline, storage, storageKey: 'collab-outbox:notes' });
+  assert.equal(todo.unsentCount, 0);
+  assert.equal(notesAgain.unsentCount, 1);
+});

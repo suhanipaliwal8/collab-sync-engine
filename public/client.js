@@ -10,6 +10,11 @@ import { createSiteId } from './client/site-id.js';
 const textarea = document.querySelector('#editor');
 const statusLabel = document.querySelector('#status');
 const offlineToggle = document.querySelector('#offline-toggle');
+// Which document to open, and the optional access token, come from the page URL:
+//   http://localhost:8080/?doc=notes&token=secret
+const pageParams = new URLSearchParams(location.search);
+const documentId = pageParams.get('doc') || 'default';
+const accessToken = pageParams.get('token');
 
 // On a phone there are no developer tools, so show unexpected errors on the page.
 window.addEventListener('error', (event) => setStatus(`Error: ${event.message}`, 'bad'));
@@ -59,7 +64,11 @@ function showStatus({ status, unsent }) {
   const pending = unsent > 0 ? ` · ${unsent} unsent edit${unsent === 1 ? '' : 's'}` : '';
   if (status === 'online') setStatus('Connected', 'ok');
   else if (status === 'connecting') setStatus(`Connecting…${pending}`, '');
-  else setStatus(`Offline${pending}. Edits are kept and will sync when you reconnect`, 'bad');
+  else if (!client.hasSynced) {
+    setStatus('Cannot connect. Is the server running? If access control is on, add ?token=… to the URL', 'bad');
+  } else {
+    setStatus(`Offline${pending}. Edits are kept and will sync when you reconnect`, 'bad');
+  }
 
   const ready = client.hasSynced; // editing is safe once we have received the history once
   textarea.disabled = !ready;
@@ -88,8 +97,13 @@ function showNotice(message) {
 const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
 const client = new SyncClient({
   siteId: createSiteId(), // a fresh site ID per page load, so IDs can never collide
-  createSocket: () => new WebSocket(`${scheme}://${location.host}`),
+  createSocket: () => {
+    const query = new URLSearchParams({ doc: documentId });
+    if (accessToken) query.set('token', accessToken);
+    return new WebSocket(`${scheme}://${location.host}/?${query}`);
+  },
   storage: safeSessionStorage(),
+  storageKey: `collab-outbox:${documentId}`, // one outbox per document
   onChange: render,
   onStatus: showStatus,
   onNotice: showNotice,
@@ -110,8 +124,11 @@ offlineToggle.addEventListener('click', () => {
 
 // ---------- History panel (time travel) ----------
 
-async function fetchJson(url) {
-  const response = await fetch(url);
+async function fetchJson(path) {
+  const url = new URL(path, location.origin);
+  url.searchParams.set('doc', documentId);
+  const headers = accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
+  const response = await fetch(url, { headers });
   if (!response.ok) throw new Error(`request failed (${response.status})`);
   return response.json();
 }
@@ -156,4 +173,14 @@ historyRestore.addEventListener('click', () => {
 
 historyClose.addEventListener('click', () => {
   historyPanel.hidden = true;
+});
+
+// ---------- Switching documents ----------
+
+document.querySelector('#doc-name').value = documentId;
+document.querySelector('#doc-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const next = new URLSearchParams(location.search);
+  next.set('doc', document.querySelector('#doc-name').value);
+  location.search = next.toString(); // reloads the page on the other document (token is kept)
 });

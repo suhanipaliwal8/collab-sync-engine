@@ -16,6 +16,7 @@ export class SyncClient {
     siteId,
     createSocket,
     storage = null,
+    storageKey = 'collab-outbox',
     onChange = () => {},
     onStatus = () => {},
     onNotice = () => {},
@@ -23,7 +24,7 @@ export class SyncClient {
   }) {
     this.doc = new RgaDocument(siteId);
     this.createSocket = createSocket;
-    this.outbox = new Outbox(storage);
+    this.outbox = new Outbox(storage, storageKey);
     this.onChange = onChange; // the document text changed
     this.onStatus = onStatus; // { status, unsent } changed
     this.onNotice = onNotice; // 'reverted' and 'error' messages from the server
@@ -122,7 +123,12 @@ export class SyncClient {
       this.outbox.acknowledge(message.opKey);
       this._emitStatus();
     } else {
-      this.onNotice(message);
+      if (message.type === 'error' && message.opKey) {
+        // The server will never accept this operation: stop retrying it.
+        this.outbox.acknowledge(message.opKey);
+        this._emitStatus();
+      }
+      this.onNotice(message); // 'reverted' and 'error'
     }
   }
 

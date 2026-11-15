@@ -8,12 +8,29 @@ function isId(value) {
     Number.isSafeInteger(value.counter) &&
     value.counter >= 0 &&
     typeof value.siteId === 'string' &&
-    value.siteId.length > 0
+    value.siteId.length > 0 &&
+    value.siteId.length <= 64
   );
 }
 
 function pickId(id) {
   return { counter: id.counter, siteId: id.siteId };
+}
+
+// Display names: plain text, no control characters, at most 24 characters.
+function cleanName(name) {
+  if (name === undefined || name === null) return null; // null means "unchanged"
+  if (typeof name !== 'string') throw new Error('Invalid presence');
+  const cleaned = Array.from(name.replace(/\p{Cc}/gu, '').trim()).slice(0, 24).join('');
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+function cleanCursor(cursor) {
+  if (cursor === undefined || cursor === null) return null;
+  if (typeof cursor !== 'object' || !isId(cursor.start) || !isId(cursor.end)) {
+    throw new Error('Invalid presence');
+  }
+  return { start: pickId(cursor.start), end: pickId(cursor.end) };
 }
 
 // Returns a cleaned copy of the operation, or null if it is invalid.
@@ -54,6 +71,10 @@ export function parseClientMessage(raw) {
       throw new Error('Invalid version');
     }
     return { type: 'revert', version: message.version };
+  }
+
+  if (message.type === 'presence') {
+    return { type: 'presence', name: cleanName(message.name), cursor: cleanCursor(message.cursor) };
   }
 
   if (message.type !== 'op') {

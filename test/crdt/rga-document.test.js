@@ -137,3 +137,36 @@ test('hasNode knows every character, including deleted ones', () => {
   assert.equal(doc.hasNode(op.id), true);
   assert.equal(doc.hasNode({ counter: 99, siteId: 'Z' }), false);
 });
+
+function documentWithText(text) {
+  const doc = new RgaDocument('A');
+  [...text].forEach((ch, i) => doc.localInsert(i, ch));
+  return doc;
+}
+
+test('anchorAt gives the root at the start and the previous character otherwise', () => {
+  const doc = documentWithText('cat'); // ids 1@A, 2@A, 3@A
+  assert.deepEqual(doc.anchorAt(0), ROOT_ID);
+  assert.deepEqual(doc.anchorAt(2), { counter: 2, siteId: 'A' });
+  assert.deepEqual(doc.anchorAt(99), { counter: 3, siteId: 'A' }); // clamped to the end
+});
+
+test('an anchor follows edits made before it', () => {
+  const doc = documentWithText('cat');
+  const anchor = doc.anchorAt(2); // after "a"
+  doc.localInsert(0, 'X');        // "Xcat"
+  assert.equal(doc.indexOfAnchor(anchor), 3);
+});
+
+test('an anchor whose character was deleted collapses to where it was', () => {
+  const doc = documentWithText('cat');
+  const anchor = doc.anchorAt(2); // after "a"
+  doc.localDelete(1);             // deletes "a" -> "ct"
+  assert.equal(doc.indexOfAnchor(anchor), 1);
+});
+
+test('an unknown anchor is null and the root is position 0', () => {
+  const doc = documentWithText('cat');
+  assert.equal(doc.indexOfAnchor({ counter: 99, siteId: 'Z' }), null);
+  assert.equal(doc.indexOfAnchor(ROOT_ID), 0);
+});

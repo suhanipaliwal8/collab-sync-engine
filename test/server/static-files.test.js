@@ -40,6 +40,8 @@ test('serves every browser module as JavaScript', options, async () => {
       '/client.js',
       '/client/text-diff.js',
       '/client/site-id.js',
+      '/client/presence.js',
+      '/client/throttle.js',
       '/crdt/id.js',
       '/crdt/lamport-clock.js',
       '/crdt/rga-document.js',

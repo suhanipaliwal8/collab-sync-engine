@@ -5,40 +5,234 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Collab Sync Engine</title>
     <style>
-      body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
-      #status { display: inline-block; padding: 0.15rem 0.6rem; border-radius: 999px; font-size: 0.85rem; background: #ddd; color: #222; }
-      #status.ok { background: #c8f0d0; }
-      #status.bad { background: #f5c6c6; }
-      textarea { width: 100%; height: 50vh; box-sizing: border-box; padding: 0.75rem; font: 1rem/1.5 ui-monospace, monospace; }
-      #history-panel { margin-top: 1rem; padding: 1rem; border: 1px solid #bbb; border-radius: 8px; }
-      #history-slider { width: 100%; }
-      #history-preview { white-space: pre-wrap; border: 1px solid #ccc; padding: 0.75rem; min-height: 6rem; font: 1rem/1.5 ui-monospace, monospace; }
-      small { color: #666; }
+      :root {
+        color-scheme: light dark;
+        --bg: #ffffff;
+        --text: #1c2230;
+        --muted: #5a6478;
+        --border: #c9d1e0;
+        --surface: #f4f6fb;
+        --primary: #2f5bea;
+        --primary-text: #ffffff;
+        --ok-bg: #d4f4dd;
+        --ok-text: #0e5a2b;
+        --bad-bg: #fbd9d9;
+        --bad-text: #8c1d1d;
+        --warn-bg: #fdecc8;
+        --warn-text: #7a4b00;
+        --neutral-bg: #e4e8f1;
+        --neutral-text: #2a3347;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0f1218;
+          --text: #e7eaf2;
+          --muted: #9aa4b8;
+          --border: #2f394d;
+          --surface: #1a202c;
+          --primary: #6b8cff;
+          --primary-text: #0b1020;
+          --ok-bg: #12351f;
+          --ok-text: #9be8b5;
+          --bad-bg: #421a1a;
+          --bad-text: #ffb3b3;
+          --warn-bg: #4a3400;
+          --warn-text: #ffd98a;
+          --neutral-bg: #232b3b;
+          --neutral-text: #d5dbea;
+        }
+      }
+
+      * { box-sizing: border-box; }
+      [hidden] { display: none !important; }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      main { max-width: 760px; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+      h1 { margin: 0 0 1rem; font-size: 1.6rem; }
+      h2 { margin: 0 0 0.6rem; font-size: 1.1rem; }
+
+      /* ----- layout rows ----- */
+      .toolbar,
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.6rem;
+        margin-bottom: 0.8rem;
+      }
+      label { color: var(--muted); font-size: 0.9rem; }
+      .section-title { margin: 0 0 0.4rem; color: var(--muted); font-size: 0.9rem; font-weight: 600; }
+
+      /* ----- status badge ----- */
+      .pill {
+        display: inline-block;
+        padding: 0.2rem 0.75rem;
+        border-radius: 999px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        background: var(--neutral-bg);
+        color: var(--neutral-text);
+      }
+      .pill.ok { background: var(--ok-bg); color: var(--ok-text); }
+      .pill.bad { background: var(--bad-bg); color: var(--bad-text); }
+
+      /* ----- buttons ----- */
+      button {
+        font: inherit;
+        font-size: 0.92rem;
+        font-weight: 600;
+        padding: 0.45rem 0.95rem;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--surface);
+        color: var(--text);
+        cursor: pointer;
+        transition: border-color 0.15s, filter 0.15s, background 0.15s;
+      }
+      button:hover:not(:disabled) { border-color: var(--primary); }
+      button:active:not(:disabled) { filter: brightness(0.95); }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      button.primary {
+        background: var(--primary);
+        border-color: var(--primary);
+        color: var(--primary-text);
+      }
+      button.primary:hover:not(:disabled) { filter: brightness(1.08); }
+      button.warn {
+        background: var(--warn-bg);
+        border-color: var(--warn-text);
+        color: var(--warn-text);
+      }
+
+      /* ----- inputs ----- */
+      input:not([type="range"]) {
+        font: inherit;
+        padding: 0.4rem 0.65rem;
+        min-width: 0;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--bg);
+        color: var(--text);
+      }
+      input[type="range"] { width: 100%; accent-color: var(--primary); }
+
+      button:focus-visible,
+      input:focus-visible,
+      textarea:focus-visible {
+        outline: 3px solid color-mix(in srgb, var(--primary) 45%, transparent);
+        outline-offset: 1px;
+      }
+
+      /* ----- who is here ----- */
+      .peers {
+        list-style: none;
+        margin: 0 0 1rem;
+        padding: 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+      .peers li {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        padding: 0.25rem 0.75rem;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: var(--surface);
+        font-size: 0.9rem;
+      }
+      .peers li.empty { color: var(--muted); border-style: dashed; background: transparent; }
+      .dot { flex: none; width: 0.7rem; height: 0.7rem; border-radius: 50%; }
+
+      /* ----- editor ----- */
+      textarea {
+        width: 100%;
+        height: 45vh;
+        min-height: 12rem;
+        padding: 0.8rem;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--bg);
+        color: var(--text);
+        font: 1rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        resize: vertical;
+      }
+      textarea:disabled { background: var(--surface); }
+
+      /* ----- history panel ----- */
+      .panel {
+        margin-top: 1.25rem;
+        padding: 1rem;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--surface);
+      }
+      .panel .actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.8rem; }
+      #history-preview {
+        margin: 0.8rem 0 0;
+        min-height: 6rem;
+        padding: 0.75rem;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--bg);
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font: 1rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      .footer { margin-top: 1.25rem; color: var(--muted); font-size: 0.85rem; }
+      code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     </style>
   </head>
   <body>
-    <h1>Collab Sync Engine</h1>
-    <p>
-      <span id="status">Connecting…</span>
-      <button id="offline-toggle" type="button" disabled>Simulate offline</button>
-      <button id="history-open" type="button" disabled>History</button>
-    </p>
-    <form id="doc-form">
-      <label>Document <input id="doc-name" maxlength="64" pattern="[A-Za-z0-9_\-]+" required /></label>
-      <button type="submit">Open</button>
-    </form>
-    <textarea id="editor" placeholder="Start typing. Open this page in a second tab to see it sync." disabled></textarea>
+    <main>
+      <h1>Collab Sync Engine</h1>
 
-    <section id="history-panel" hidden>
-      <h2>History</h2>
-      <label for="history-slider">Version <output id="history-label">0 of 0</output></label>
-      <input id="history-slider" type="range" min="0" max="0" value="0" />
-      <pre id="history-preview"></pre>
-      <button id="history-restore" type="button">Restore this version</button>
-      <button id="history-close" type="button">Close</button>
-    </section>
+      <div class="toolbar">
+        <span id="status" class="pill">Connecting…</span>
+        <button id="offline-toggle" type="button" disabled>Simulate offline</button>
+        <button id="history-open" type="button" disabled>History</button>
+      </div>
 
-    <p><small>Your site ID: <code id="site-id"></code></small></p>
+      <form id="doc-form" class="row">
+        <label for="doc-name">Document</label>
+        <input id="doc-name" maxlength="64" pattern="[A-Za-z0-9_\-]+" required />
+        <button class="primary" type="submit">Open</button>
+      </form>
+
+      <div class="row">
+        <label for="display-name">Your name</label>
+        <input id="display-name" maxlength="24" autocomplete="off" />
+      </div>
+
+      <p class="section-title">Who is here</p>
+      <ul id="peer-list" class="peers"></ul>
+
+      <textarea
+        id="editor"
+        placeholder="Start typing. Open this page in a second tab to see it sync."
+        disabled
+      ></textarea>
+
+      <section id="history-panel" class="panel" hidden>
+        <h2>History</h2>
+        <label for="history-slider">Version <output id="history-label">0 of 0</output></label>
+        <input id="history-slider" type="range" min="0" max="0" value="0" />
+        <pre id="history-preview"></pre>
+        <div class="actions">
+          <button id="history-restore" class="primary" type="button">Restore this version</button>
+          <button id="history-close" type="button">Close</button>
+        </div>
+      </section>
+
+      <p class="footer">Your site ID: <code id="site-id"></code></p>
+    </main>
     <script type="module" src="/client.js"></script>
   </body>
 </html>

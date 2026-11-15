@@ -251,3 +251,75 @@ test('outboxes of different documents never mix', () => {
   assert.equal(todo.unsentCount, 0);
   assert.equal(notesAgain.unsentCount, 1);
 });
+
+test('clients see each other\'s name and cursor', options, () =>
+  withServer(async ({ make }) => {
+    const alice = make('alice');
+    const bob = make('bob');
+    alice.connect();
+    bob.connect();
+    await waitFor(() => online(alice, bob), 'both online');
+
+    setText(alice, 'cat');
+    await waitFor(() => bob.text === 'cat', 'bob to receive the text');
+    alice.updatePresence({ name: 'Alice', start: 2 });
+
+    await waitFor(() => bob.peers.length === 1, 'bob to see alice');
+    const [peer] = bob.peers;
+    assert.equal(peer.name, 'Alice');
+    assert.equal(peer.start, 2);
+    assert.equal(peer.end, 2);
+  }));
+
+test('a remote cursor follows my edits without a new presence message', options, () =>
+  withServer(async ({ make }) => {
+    const alice = make('alice');
+    const bob = make('bob');
+    alice.connect();
+    bob.connect();
+    await waitFor(() => online(alice, bob), 'both online');
+
+    setText(alice, 'cat');
+    await waitFor(() => bob.text === 'cat', 'bob to receive the text');
+    alice.updatePresence({ name: 'Alice', start: 2 }); // after "ca"
+    await waitFor(() => bob.peers[0]?.start === 2, 'bob to see the cursor');
+
+    setText(bob, 'Xcat'); // Bob types at the very start
+    assert.equal(bob.peers[0].start, 3); // Alice's cursor moved with the text
+  }));
+
+test('presence disappears when a peer leaves and returns after it reconnects', options, () =>
+  withServer(async ({ make }) => {
+    const alice = make('alice');
+    const bob = make('bob');
+    alice.connect();
+    bob.connect();
+    await waitFor(() => online(alice, bob), 'both online');
+
+    alice.updatePresence({ name: 'Alice', start: 0 });
+    await waitFor(() => bob.peers.length === 1, 'bob to see alice');
+
+    alice.goOffline();
+    await waitFor(() => bob.peers.length === 0, 'bob to see alice leave');
+
+    alice.goOnline();
+    await waitFor(
+      () => bob.peers.length === 1 && bob.peers[0].name === 'Alice',
+      'alice to reappear after reconnecting',
+    );
+  }));
+
+test('a client that joins later learns who is already there', options, () =>
+  withServer(async ({ make }) => {
+    const alice = make('alice');
+    alice.connect();
+    await waitFor(() => online(alice), 'alice online');
+    alice.updatePresence({ name: 'Alice', start: 0 });
+
+    const carol = make('carol');
+    carol.connect();
+    await waitFor(
+      () => online(carol) && carol.peers.length === 1 && carol.peers[0].name === 'Alice',
+      'carol to learn about alice',
+    );
+  }));

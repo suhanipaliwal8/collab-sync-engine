@@ -1,7 +1,8 @@
 {
-  "name": "collab-sync-engine",
-  "version": "0.1.0",
-  "description": "Real-time collaborative sync engine built from scratch with a custom CRDT",
+  "version": "1.0.0",
+  "description": "Real-time collaborative text editing backend with a hand-written RGA CRDT, offline editing, history/revert and presence",
+  "keywords": ["crdt", "collaborative-editing", "real-time", "websocket", "nodejs", "postgresql", "offline-first"],
+  "author": "Suhani",
   "type": "module",
   "scripts": {
     "start": "node src/server/index.js",
@@ -14,6 +15,10 @@
     "app:down": "docker compose --profile app down"
   },
   "license": "MIT",
+  "engines": { "node": ">=22" },
+  "repository": { "type": "git", "url": "git+https://github.com/suhanipaliwal8/collab-sync-engine.git" },
+  "bugs": { "url": "https://github.com/suhanipaliwal8/collab-sync-engine/issues" },
+  "homepage": "https://github.com/suhanipaliwal8/collab-sync-engine#readme",
   "dependencies": {
     "pg": "^8.23.1",
     "ws": "^8.23.0"

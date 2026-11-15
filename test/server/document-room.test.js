@@ -320,3 +320,91 @@ test('rejects a delete of a character that does not exist', async () => {
   await assert.rejects(room.receive(fakeClient('c1'), op), InvalidOperationError);
   assert.equal(room.versionCount, 0);
 });
+
+// ---------- Presence ----------
+
+const cursorAt = (counter) => ({
+  start: { counter, siteId: 'alice' },
+  end: { counter, siteId: 'alice' },
+});
+
+test('a presence update reaches the others but not its sender', () => {
+  const room = new DocumentRoom('doc');
+  const alice = fakeClient('c1');
+  const bob = fakeClient('c2');
+  room.join(alice);
+  room.join(bob);
+
+  room.updatePresence(alice, { name: 'Alice', cursor: cursorAt(1) });
+
+  assert.deepEqual(bob.messages[1], {
+    type: 'presence',
+    peer: { id: 'c1', name: 'Alice', cursor: cursorAt(1) },
+  });
+  assert.equal(alice.messages.length, 1); // only her sync
+});
+
+test('a late joiner receives the presence of everyone already there', () => {
+  const room = new DocumentRoom('doc');
+  const alice = fakeClient('c1');
+  const bob = fakeClient('c2');
+  room.join(alice);
+  room.updatePresence(alice, { name: 'Alice', cursor: cursorAt(1) });
+  room.join(bob);
+
+  assert.deepEqual(bob.messages[1], {
+    type: 'presence_state',
+    peers: [{ id: 'c1', name: 'Alice', cursor: cursorAt(1) }],
+  });
+});
+
+test('a partial update keeps the earlier name and cursor', () => {
+  const room = new DocumentRoom('doc');
+  const alice = fakeClient('c1');
+  const bob = fakeClient('c2');
+  room.join(alice);
+  room.join(bob);
+
+  room.updatePresence(alice, { name: 'Alice', cursor: null });
+  room.updatePresence(alice, { name: null, cursor: cursorAt(3) });
+
+  assert.deepEqual(bob.messages.at(-1).peer, { id: 'c1', name: 'Alice', cursor: cursorAt(3) });
+});
+
+test('leaving is announced to the others, but only if the leaver had presence', () => {
+  const room = new DocumentRoom('doc');
+  const alice = fakeClient('c1');
+  const bob = fakeClient('c2');
+  const carol = fakeClient('c3');
+  [alice, bob, carol].forEach((client) => room.join(client));
+  room.updatePresence(alice, { name: 'Alice' });
+
+  room.leave(alice);
+  assert.deepEqual(bob.messages.at(-1), { type: 'presence_leave', id: 'c1' });
+
+  const countBefore = bob.messages.length;
+  room.leave(carol); // never sent presence
+  assert.equal(bob.messages.length, countBefore);
+});
+
+test('presence is never saved and is not part of the history', async () => {
+  const store = fakeStore();
+  const room = new DocumentRoom('doc', { store });
+  const alice = fakeClient('c1');
+  room.join(alice);
+  room.updatePresence(alice, { name: 'Alice', cursor: cursorAt(1) });
+
+  assert.equal(room.versionCount, 0);
+  assert.equal(store.appended.length, 0);
+});
+
+test('presence from a client that is not in the room is ignored', () => {
+  const room = new DocumentRoom('doc');
+  const bob = fakeClient('c2');
+  room.join(bob);
+
+  room.updatePresence(fakeClient('c9'), { name: 'Stranger' });
+
+  assert.equal(bob.messages.length, 1);
+  assert.equal(room.presence.size, 0);
+});

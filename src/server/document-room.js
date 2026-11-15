@@ -17,6 +17,7 @@ export class DocumentRoom {
     this.log = [];                        // every operation, in arrival order = the history
     this.seen = new Set();                // keys of operations already accepted
     this.clients = new Set();
+    this.presence = new Map(); // client -> { id, name, cursor }  (in memory only, never saved)
     this.queue = Promise.resolve();       // operations are processed one at a time
   }
 
@@ -41,6 +42,8 @@ export class DocumentRoom {
   join(client) {
     this.clients.add(client);
     client.send({ type: 'sync', ops: [...this.log] }); // full history for the newcomer
+    const peers = [...this.presence.values()];
+    if (peers.length > 0) client.send({ type: 'presence_state', peers }); // who is already here
     this.logger.info(
       `${label(client)} joined "${this.documentId}" (${this.clients.size} online, ` +
         `sent ${this.log.length} operation(s))`,
@@ -48,8 +51,30 @@ export class DocumentRoom {
   }
 
   leave(client) {
-    if (this.clients.delete(client)) {
-      this.logger.info(`${label(client)} left "${this.documentId}" (${this.clients.size} online)`);
+    if (!this.clients.delete(client)) return;
+    this.logger.info(`${label(client)} left "${this.documentId}" (${this.clients.size} online)`);
+
+    if (this.presence.delete(client)) {
+      for (const other of this.clients) other.send({ type: 'presence_leave', id: client.id });
+    }
+  }
+
+  // ---------- Presence: who is here and where their cursor is ----------
+  // Ephemeral: relayed to the others, never saved, no acknowledgement. `name` and `cursor`
+  // may be null, meaning "keep what we had".
+  updatePresence(client, { name = null, cursor = null }) {
+    if (!this.clients.has(client)) return; // ignore anyone who is not in the room
+
+    const previous = this.presence.get(client) ?? {
+      id: client.id,
+      name: `Guest ${client.id}`,
+      cursor: null,
+    };
+    const peer = { id: client.id, name: name ?? previous.name, cursor: cursor ?? previous.cursor };
+    this.presence.set(client, peer);
+
+    for (const other of this.clients) {
+      if (other !== client) other.send({ type: 'presence', peer });
     }
   }
 

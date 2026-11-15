@@ -6,7 +6,7 @@
     <title>Collab Sync Engine</title>
     <style>
       :root {
-        color-scheme: light dark;
+        color-scheme: light;
         --bg: #ffffff;
         --text: #1c2230;
         --muted: #5a6478;
@@ -22,25 +22,6 @@
         --warn-text: #7a4b00;
         --neutral-bg: #e4e8f1;
         --neutral-text: #2a3347;
-      }
-      @media (prefers-color-scheme: dark) {
-        :root {
-          --bg: #0f1218;
-          --text: #e7eaf2;
-          --muted: #9aa4b8;
-          --border: #2f394d;
-          --surface: #1a202c;
-          --primary: #6b8cff;
-          --primary-text: #0b1020;
-          --ok-bg: #12351f;
-          --ok-text: #9be8b5;
-          --bad-bg: #421a1a;
-          --bad-text: #ffb3b3;
-          --warn-bg: #4a3400;
-          --warn-text: #ffd98a;
-          --neutral-bg: #232b3b;
-          --neutral-text: #d5dbea;
-        }
       }
 
       * { box-sizing: border-box; }
@@ -124,7 +105,7 @@
       button:focus-visible,
       input:focus-visible,
       textarea:focus-visible {
-        outline: 3px solid color-mix(in srgb, var(--primary) 45%, transparent);
+        outline: 3px solid rgba(47, 91, 234, 0.45);
         outline-offset: 1px;
       }
 

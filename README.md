@@ -12,6 +12,7 @@ sync or CRDT libraries.
 - Full edit history with revert to any point
 - Live broadcast over WebSockets (sub-second)
 - Formal convergence tests
+- Stretch: presence indicators (who is online, where their cursor is)
 
 ## Status
 - Phase 0: project setup ✅
@@ -24,8 +25,9 @@ sync or CRDT libraries.
 - Phase 7: edit history, time travel and revert ✅
 - Phase 8: offline editing, reconnect, acknowledgements ✅
 - Phase 9: multiple documents, access token, limits, latency measurement ✅
+- Phase 10: presence (who is here, live cursors) ✅
 
-**Tests: 154 passing**
+**Tests: 190 passing**
 
 ## Try it
 Requires Node.js LTS (22+) and Docker Desktop.
@@ -35,6 +37,8 @@ Requires Node.js LTS (22+) and Docker Desktop.
     npm start
 
 Open http://localhost:8080 in two browser windows and type in both.
+- **Presence**: set your name; the "Who is here" list shows everyone in the
+  document with their cursor (line and column) or selection size.
 - **Documents**: `?doc=notes`, `?doc=todo` ... each is fully isolated.
 - **History**: drag through every version of the document and restore one.
 - **Simulate offline**: keep typing while offline, then **Go online**: both
@@ -58,10 +62,11 @@ The typed text is never written to the logs, only operation types and IDs.
 ## Architecture
     Browser: textarea ─► SyncClient ─┬─ RgaDocument (local copy, always editable)
                                      ├─ Outbox (unacknowledged edits, kept in sessionStorage)
+                                     ├─ PresenceBook (who else is here, cursors as anchors)
                                      └─ auto-reconnecting WebSocket
                                               │
        Sync server ── RoomManager ── DocumentRoom (one per document) ── PostgreSQL (append-only log)
-       (HTTP: page + /api/history on the same port)
+       (HTTP: page + /api/history on the same port)      └─ presence: in memory only
 
 - **Shared code**: the same `src/crdt/*.js` modules run in the server and the browser.
 - **Local-first**: an edit is applied to the local document immediately, then sent.
@@ -74,14 +79,43 @@ The typed text is never written to the logs, only operation types and IDs.
 - **Rooms**: created on first use and restored from the database; concurrent first
   requests share one restore. Document IDs match `[A-Za-z0-9_-]{1,64}`.
 
+## Presence
+Presence is **ephemeral** state: never saved, not part of the history, no
+acknowledgement and no outbox. The latest value wins, it is forgotten when a
+connection closes, and it is re-announced after a reconnect.
+
+- **Cursors are anchored to character IDs**, not indexes: a cursor is "right after
+  character `2@u-ab12`" (or the document start). Every client resolves the anchor
+  against its own copy, so cursors follow other people's edits without new
+  messages. A deleted anchor collapses to where the character was; an anchor
+  whose character has not arrived yet is shown as unknown until it does.
+- **Heartbeat**: the server pings every 30 s and drops connections that did not
+  answer, so a peer whose network died disappears from the list.
+- **Throttling**: the browser sends at most one cursor update per 100 ms and always
+  delivers the latest position.
+- **Safety**: names are trimmed, stripped of control characters and capped at 24
+  characters, and displayed with `textContent`; presence counts against the
+  per-connection rate limit.
+- The page lists peers (colour, name, line/column or selection size). Drawing carets
+  inside the textarea would need a mirror-element technique and is intentionally
+  left out.
+
+| Direction | Message |
+|---|---|
+| client → server | `{ "type": "presence", "name"?, "cursor"?: { "start": <anchor>, "end": <anchor> } }` |
+| server → client | `{ "type": "presence", "peer": { "id", "name", "cursor" } }` |
+| server → client | `{ "type": "presence_state", "peers": [...] }` sent to a newcomer |
+| server → client | `{ "type": "presence_leave", "id" }` |
+
 ## Security and limits
 | Threat | Defence |
 |---|---|
 | Garbage operations in the permanent log | the room refuses operations whose parent/target character does not exist (the error carries the `opKey` so the client drops it) |
-| Flooding | token bucket per connection (burst 5000, then 500 ops/s; exceeding it closes the connection with code 1008 and the client's outbox re-sends after reconnecting), 1 MiB message cap, 50 clients per document, 200 open documents |
+| Flooding | token bucket per connection (burst 5000, then 500 messages/s; exceeding it closes the connection with code 1008 and the client's outbox re-sends after reconnecting), 1 MiB message cap, 50 clients per document, 200 open documents |
+| Dead connections | heartbeat ping/pong |
 | Unauthorised access | optional shared token, compared in constant time; the page itself stays public |
 | Another website using a visitor's browser (cross-site WebSocket hijacking) | `Origin` must match the host when present |
-| Odd document names | strict ID pattern |
+| Odd document or display names | strict ID pattern; names sanitized and rendered as text |
 
 The token proves knowledge of a shared secret, not identity, and travels in the
 URL (browsers cannot set WebSocket headers), so real use needs HTTPS. Per-user
@@ -117,7 +151,7 @@ Results on my machine: *(paste your own `npm run bench` numbers here)*
 | `GET /api/history/:version?doc=name` | `{ version, count, text }` (400 invalid, 404 unknown) |
 | WebSocket `{ type: "revert", version }` | revert to a version (needs a connection) |
 
-## Protocol (JSON over WebSocket, `ws://host/?doc=name&token=...`)
+## Protocol for document operations (JSON over WebSocket, `ws://host/?doc=name&token=...`)
 | Direction | Message |
 |---|---|
 | client → server | `{ "type": "op", "op": <insert or delete> }` |
@@ -158,11 +192,11 @@ tests are strong evidence of convergence, not a mathematical proof.
 
 ## Project structure
     src/crdt/        IDs, Lamport clock, RGA document, history, operation keys (shared with the browser)
-    src/client/      SyncClient, outbox, backoff, text diff, site ID (shared with the browser)
-    src/server/      protocol, rooms, store, API, auth, rate limiter, logger, HTTP + WebSocket server
+    src/client/      SyncClient, outbox, presence, backoff, throttle, text diff, site ID (shared with the browser)
+    src/server/      protocol, rooms, store, API, auth, rate limiter, heartbeat, logger, HTTP + WebSocket server
     src/tools/       latency benchmark and statistics
     scripts/         command-line tools (npm run bench)
-    public/          index.html and client.js (thin browser glue)
+    public/          index.html (styled, light/dark) and client.js (thin browser glue)
     docker-compose.yml   PostgreSQL for development
     test/            unit, convergence, end-to-end, chaos and hardening tests
 
@@ -180,6 +214,7 @@ service container. Tests use their own document IDs and clean up after themselve
 - The access token is one shared secret in the URL: no user identity, needs HTTPS in real use.
 - Reverting needs a connection; a revert could be partial if the database fails midway.
 - Delete operations don't record who deleted.
+- Presence is shown as a list; there are no coloured carets inside the text box.
 
 ## Roadmap
-Presence (who is online and where their cursor is) → structured documents → final polish.
+Structured documents (nested lists or a spreadsheet grid) → final polish and write-up.

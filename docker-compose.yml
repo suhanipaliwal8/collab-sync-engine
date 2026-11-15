@@ -15,5 +15,25 @@ services:
       timeout: 3s
       retries: 10
 
+  # The sync server itself. Behind a profile, so `npm run db:up` starts only the database
+  # (for development) and `npm run app:up` starts everything.
+  app:
+    profiles: ["app"]
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgres://collab:collab_dev_password@db:5432/collab_sync
+      LOG_LEVEL: info
+      ACCESS_TOKEN: ${ACCESS_TOKEN:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   pgdata:

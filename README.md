@@ -1,220 +1,196 @@
 # Collab Sync Engine
 
+**The backend behind Google Docs-style live editing, built from first principles in Node.js.**
+A hand-written RGA CRDT (no sync or CRDT libraries) lets many people edit one document at the
+same time, even offline, and always end up with identical text.
+
 ![CI](https://github.com/suhanipaliwal8/collab-sync-engine/actions/workflows/ci.yml/badge.svg)
+![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
+![Node.js 22+](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)
 
-A real-time collaborative text-editing backend (Google Docs-style) built
-from first principles in Node.js, with a hand-written CRDT. No pre-built
-sync or CRDT libraries.
+![Demo](docs/media/demo.gif)
 
-## Goals
-- Multiple clients edit the same document concurrently and converge
-- Offline edits merge correctly on reconnect
-- Full edit history with revert to any point
-- Live broadcast over WebSockets (sub-second)
-- Formal convergence tests
-- Stretch: presence indicators (who is online, where their cursor is)
+## Why this project
 
-## Status
-- Phase 0: project setup ✅
-- Phase 1: unique IDs + Lamport clock ✅
-- Phase 2: RGA insert/delete + CI ✅
-- Phase 3: convergence tests ✅
-- Phase 4: WebSocket server with live broadcast ✅
-- Phase 5: browser editor ✅ (+ phone fix)
-- Phase 6: PostgreSQL persistence, Docker, logging ✅
-- Phase 7: edit history, time travel and revert ✅
-- Phase 8: offline editing, reconnect, acknowledgements ✅
-- Phase 9: multiple documents, access token, limits, latency measurement ✅
-- Phase 10: presence (who is here, live cursors) ✅
+Most developers *use* sync engines (Firebase, Liveblocks) without knowing how concurrent edits are
+merged without conflict. This project implements that part itself, then builds everything around
+it that a real system needs: durable history, offline editing, reconnects without loss or
+duplication, access control, rate limiting, and measured latency.
 
-**Tests: 190 passing**
+## Features
 
-## Try it
-Requires Node.js LTS (22+) and Docker Desktop.
+- **Concurrent editing that converges**: a sequence CRDT (RGA) with Lamport-clock IDs, tombstones,
+  idempotent operations and causal buffering
+- **Offline editing**: edits made without a connection are kept in an outbox and merged on reconnect
+- **Reconnect without loss or duplication**: acknowledgements, outbox, backoff with jitter, a
+  database-level uniqueness guarantee
+- **History and revert**: an append-only PostgreSQL log; view any version, restore it by adding
+  compensating operations (history is never rewritten)
+- **Live sync**: WebSocket broadcast, measured end to end (see Performance)
+- **Presence**: who is online and where their cursor is, anchored to character IDs so cursors
+  follow edits; a heartbeat removes dead connections
+- **Multiple documents** (`?doc=name`) and **hardening**: validation, integrity checks, token
+  check, Origin check, rate limiting, caps
+- **Proven**: 192 automated tests including every delivery order, seeded random simulations,
+  real-network tests and a chaos test with random disconnects
+
+## Requirements coverage
+
+| # | Requirement | Where and how it is proven |
+|---|---|---|
+| 1 | Concurrent editing converges | `test/crdt/convergence.test.js`, end-to-end tests |
+| 2 | Own conflict resolution (no library) | `src/crdt/rga-document.js`; the only dependencies are `ws` and `pg` |
+| 3 | Offline edits merge on reconnect | `src/client/sync-client.js`; tests "offline edits on both sides merge" and the chaos test |
+| 4 | Full history and revert to any point | `src/crdt/history.js`, `DocumentRoom.revertTo`, History panel; tests in `test/server/revert.test.js` |
+| 5 | Sub-second propagation | `npm run bench` and a test asserting p95 < 1000 ms |
+| 6 | Convergence proof by test | all 720 orders of one scenario, duplicates, random simulations, plus [`docs/CONVERGENCE.md`](docs/CONVERGENCE.md) |
+| 7 | Disconnect mid-edit without loss or duplication | acks, outbox, `UNIQUE (document_id, op_key)`; the chaos test counts operations exactly |
+| + | Stretch: presence | cursor anchors, heartbeat, "Who is here" list |
+| + | Stretch: structured documents | **not implemented** (see Future work) |
+
+## Quick start
+
+**Everything in Docker** (needs Docker Desktop):
+
+    npm run app:up         # builds and starts PostgreSQL + the server
+    # open http://localhost:8080 in two browser windows
+    npm run app:down
+
+**For development** (needs Node.js 22+ and Docker Desktop for the database):
 
     npm install
-    npm run db:up      # starts PostgreSQL in Docker (port 5433)
-    npm start
+    npm run db:up          # PostgreSQL in Docker (port 5433)
+    npm start              # http://localhost:8080
+    npm test
 
-Open http://localhost:8080 in two browser windows and type in both.
-- **Presence**: set your name; the "Who is here" list shows everyone in the
-  document with their cursor (line and column) or selection size.
-- **Documents**: `?doc=notes`, `?doc=todo` ... each is fully isolated.
-- **History**: drag through every version of the document and restore one.
-- **Simulate offline**: keep typing while offline, then **Go online**: both
-  sides merge and nothing is lost. Stopping the server works too.
+Try it: open the page in two windows and type in both; set different names to see
+"Who is here"; click **Simulate offline**, edit, then **Go online**; open **History** and
+restore a version; use `?doc=notes` for another document. Run `npm run demo` to watch two bots
+edit concurrently and merge after one of them goes offline. Details: [`docs/DEMO.md`](docs/DEMO.md).
 
-The terminal prints a URL for other devices on the same Wi-Fi (e.g. your phone).
+## How it works (short version)
 
-    npm run db:down    # stop the database (data is kept in a Docker volume)
-    npm run bench      # measure broadcast latency (see below)
+Every character gets a unique ID `{ counter, siteId }`. An edit is an *operation* ("insert x after
+character A", "delete character B"). Because operations refer to characters, not positions, they
+can arrive late, twice or out of order and still produce the same document everywhere. The server
+is a relay with a durable log: it saves each operation to PostgreSQL, then broadcasts it and
+acknowledges it. Clients apply edits locally first and re-send anything unacknowledged after a
+reconnect.
+
+    Browser: textarea → SyncClient → RgaDocument (local copy) + Outbox + PresenceBook
+                           │  WebSocket
+    Server:  upgrade checks → RoomManager → DocumentRoom (one per document) → PostgreSQL log
+
+Read more:
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): components, data model, flows, guarantees, failure modes
+- [`docs/CONVERGENCE.md`](docs/CONVERGENCE.md): why replicas converge, with its assumptions
+- [`docs/adr/`](docs/adr): the six main design decisions and their alternatives
+
+## Performance
+
+`npm run bench -- [receivers] [operations]` starts a server (with the database), connects one
+sender and N receivers, and times every delivery with a monotonic clock. Percentiles are
+reported because averages hide slow outliers. Measured on my machine (replace with your numbers):
+
+| Receivers | Operations | p50 | p95 | p99 | max |
+|---|---|---|---|---|---|
+| 10 | 500 | _ ms | _ ms | _ ms | _ ms |
+
+Includes the database write; excludes real network delay and browser rendering.
+
+## Security and limits
+
+| Threat | Defence |
+|---|---|
+| Garbage operations in the permanent log | shape validation; unknown parent/target rejected; id must be newer than its parent |
+| Flooding | token bucket per connection (closes with 1008; the outbox re-sends after reconnecting), 1 MiB messages, 50 clients per document, 200 open documents |
+| Dead connections | heartbeat ping/pong |
+| Unauthorised access | optional `ACCESS_TOKEN` (constant-time comparison) for WebSockets and the history API |
+| Another website using a visitor's browser | `Origin` check on upgrade |
+| Odd document or display names | strict ID pattern; names sanitized and shown as text |
+
+The token proves knowledge of a shared secret, not identity, and travels in the URL, so real use
+needs HTTPS. Per-user login is intentionally out of scope.
 
 ## Configuration
+
 | Variable | Default | Meaning |
 |---|---|---|
 | `PORT` | `8080` | HTTP + WebSocket port |
-| `LOG_LEVEL` | `debug` | `debug` (every operation), `info`, `warn`, `error` |
+| `LOG_LEVEL` | `debug` (`info` in Docker) | `debug` (every operation), `info`, `warn`, `error` |
 | `DATABASE_URL` | local Docker database | PostgreSQL connection string |
-| `ACCESS_TOKEN` | *(none)* | when set, WebSocket clients and `/api/...` must present it (`?token=` or `Authorization: Bearer`) |
+| `ACCESS_TOKEN` | none | when set, clients must present it (`?token=` or `Authorization: Bearer`) |
 
-The typed text is never written to the logs, only operation types and IDs.
+Typed text is never written to the logs, only operation types and IDs.
 
-## Architecture
-    Browser: textarea ─► SyncClient ─┬─ RgaDocument (local copy, always editable)
-                                     ├─ Outbox (unacknowledged edits, kept in sessionStorage)
-                                     ├─ PresenceBook (who else is here, cursors as anchors)
-                                     └─ auto-reconnecting WebSocket
-                                              │
-       Sync server ── RoomManager ── DocumentRoom (one per document) ── PostgreSQL (append-only log)
-       (HTTP: page + /api/history on the same port)      └─ presence: in memory only
+## API and protocol
 
-- **Shared code**: the same `src/crdt/*.js` modules run in the server and the browser.
-- **Local-first**: an edit is applied to the local document immediately, then sent.
-- **Server = relay with a durable log**: it saves every operation to PostgreSQL
-  *before* broadcasting or acknowledging it and ignores duplicates. Conflict
-  resolution happens in the CRDT, not on the server.
-- **Append-only storage**: table `operations(seq, document_id, op_key, op JSONB,
-  created_at)`; `UNIQUE (document_id, op_key)` makes duplicate storage impossible.
-- **Ordered processing**: within a document, edits and reverts go through one queue.
-- **Rooms**: created on first use and restored from the database; concurrent first
-  requests share one restore. Document IDs match `[A-Za-z0-9_-]{1,64}`.
+HTTP (add `&doc=name`, and the token if enabled):
+`GET /api/history?limit=50` returns `{ count, entries }`; `GET /api/history/:version` returns `{ version, count, text }`.
 
-## Presence
-Presence is **ephemeral** state: never saved, not part of the history, no
-acknowledgement and no outbox. The latest value wins, it is forgotten when a
-connection closes, and it is re-announced after a reconnect.
-
-- **Cursors are anchored to character IDs**, not indexes: a cursor is "right after
-  character `2@u-ab12`" (or the document start). Every client resolves the anchor
-  against its own copy, so cursors follow other people's edits without new
-  messages. A deleted anchor collapses to where the character was; an anchor
-  whose character has not arrived yet is shown as unknown until it does.
-- **Heartbeat**: the server pings every 30 s and drops connections that did not
-  answer, so a peer whose network died disappears from the list.
-- **Throttling**: the browser sends at most one cursor update per 100 ms and always
-  delivers the latest position.
-- **Safety**: names are trimmed, stripped of control characters and capped at 24
-  characters, and displayed with `textContent`; presence counts against the
-  per-connection rate limit.
-- The page lists peers (colour, name, line/column or selection size). Drawing carets
-  inside the textarea would need a mirror-element technique and is intentionally
-  left out.
+WebSocket `ws://host/?doc=name&token=...`, JSON messages:
 
 | Direction | Message |
 |---|---|
-| client → server | `{ "type": "presence", "name"?, "cursor"?: { "start": <anchor>, "end": <anchor> } }` |
-| server → client | `{ "type": "presence", "peer": { "id", "name", "cursor" } }` |
-| server → client | `{ "type": "presence_state", "peers": [...] }` sent to a newcomer |
-| server → client | `{ "type": "presence_leave", "id" }` |
-
-## Security and limits
-| Threat | Defence |
-|---|---|
-| Garbage operations in the permanent log | the room refuses operations whose parent/target character does not exist (the error carries the `opKey` so the client drops it) |
-| Flooding | token bucket per connection (burst 5000, then 500 messages/s; exceeding it closes the connection with code 1008 and the client's outbox re-sends after reconnecting), 1 MiB message cap, 50 clients per document, 200 open documents |
-| Dead connections | heartbeat ping/pong |
-| Unauthorised access | optional shared token, compared in constant time; the page itself stays public |
-| Another website using a visitor's browser (cross-site WebSocket hijacking) | `Origin` must match the host when present |
-| Odd document or display names | strict ID pattern; names sanitized and rendered as text |
-
-The token proves knowledge of a shared secret, not identity, and travels in the
-URL (browsers cannot set WebSocket headers), so real use needs HTTPS. Per-user
-login (JWT/OAuth) is intentionally out of scope.
-
-## Latency
-`npm run bench -- [receivers] [operations]` starts a server (with the database),
-connects one sender and N receivers, and times every delivery with a monotonic
-clock. Percentiles are reported because averages hide slow outliers. A test
-asserts p95 < 1000 ms including the database write. Not included: real network
-delay and browser rendering.
-
-Results on my machine: *(paste your own `npm run bench` numbers here)*
-
-## Offline editing and reconnect
-- Every local operation waits in the **outbox** until the server sends an
-  **ack**, which it does only after saving it.
-- After any (re)connect the server sends the full history (`sync`). The client
-  merges it, treats outbox operations found in it as delivered, and re-sends the
-  rest in order. At-least-once delivery plus duplicate detection gives an
-  exactly-once effect.
-- Reconnects use exponential backoff (0.5 s up to 8 s) with random jitter.
-- The outbox is mirrored to `sessionStorage` (one per document), so unsent edits survive a reload.
-
-## History and revert
-- The operation log *is* the history. **Version N** = the document after the
-  first N operations. Revert never rewrites history: the server adds *new*
-  operations (as site `server`) that turn the current text into the old one.
-
-| Endpoint / message | Meaning |
-|---|---|
-| `GET /api/history?limit=50&doc=name` | `{ count, entries: [...] }` most recent entries |
-| `GET /api/history/:version?doc=name` | `{ version, count, text }` (400 invalid, 404 unknown) |
-| WebSocket `{ type: "revert", version }` | revert to a version (needs a connection) |
-
-## Protocol for document operations (JSON over WebSocket, `ws://host/?doc=name&token=...`)
-| Direction | Message |
-|---|---|
-| client → server | `{ "type": "op", "op": <insert or delete> }` |
-| client → server | `{ "type": "revert", "version": <int> }` |
-| server → client | `{ "type": "sync", "ops": [...] }` sent on every connect |
-| server → client | `{ "type": "op", "op": ... }` an edit by someone else (or a revert operation) |
-| server → client | `{ "type": "ack", "opKey": "ins:3@u-ab12" }` the operation is saved |
-| server → client | `{ "type": "reverted", ... }` / `{ "type": "error", "message": "...", "opKey"? }` |
-
-Insert: `{ type: "insert", id, parentId, value }`. Delete: `{ type: "delete", targetId }`.
-
-## Core concepts
-- **Site**: one client's replica of the document (each page load is a new site).
-- **Character ID**: `{ counter, siteId }`, unique and totally ordered.
-- **Lamport clock**: a logical counter guaranteeing an operation created after
-  seeing another has a larger ID.
-- **RGA (Replicated Growable Array)**: a sequence CRDT. Each insert says "put
-  this character after character X"; concurrent inserts after the same parent
-  are ordered by ID (bigger first), so every site picks the same order.
-- **Tombstones**: deleted characters are hidden, not removed.
-- **Idempotency**: applying the same operation twice changes nothing.
-- **Causal buffering**: an operation whose dependency hasn't arrived waits.
-
-## How convergence is tested
-Convergence means: any two sites that have received the same set of
-operations end in the same state, whatever the delivery order and even with
-duplicates.
-1. **Exhaustive**: 6 operations (3 concurrent) delivered in all 720 orders.
-2. **Duplicates**: every operation delivered twice in shuffled order.
-3. **Randomized simulation**: 2, 3 and 5 sites, seeded and reproducible.
-4. **Over a real network**: two clients edit through the WebSocket server.
-5. **Chaos test**: two real clients type while the server keeps dropping
-   connections and clients go offline and online; the server must end with
-   exactly as many operations as were created and every replica must be identical.
-
-Replicas are compared by full internal state (including tombstones). These
-tests are strong evidence of convergence, not a mathematical proof.
-
-## Project structure
-    src/crdt/        IDs, Lamport clock, RGA document, history, operation keys (shared with the browser)
-    src/client/      SyncClient, outbox, presence, backoff, throttle, text diff, site ID (shared with the browser)
-    src/server/      protocol, rooms, store, API, auth, rate limiter, heartbeat, logger, HTTP + WebSocket server
-    src/tools/       latency benchmark and statistics
-    scripts/         command-line tools (npm run bench)
-    public/          index.html (styled, light/dark) and client.js (thin browser glue)
-    docker-compose.yml   PostgreSQL for development
-    test/            unit, convergence, end-to-end, chaos and hardening tests
+| client → server | `{ type: "op", op }` · `{ type: "revert", version }` · `{ type: "presence", name?, cursor? }` |
+| server → client | `{ type: "sync", ops }` on every connect · `{ type: "op", op }` · `{ type: "ack", opKey }` |
+| server → client | `{ type: "reverted", version, operations }` · `{ type: "error", message, opKey? }` |
+| server → client | `{ type: "presence_state", peers }` · `{ type: "presence", peer }` · `{ type: "presence_leave", id }` |
 
 ## Testing
-Database tests need PostgreSQL running (`npm run db:up`); CI starts one as a
-service container. Tests use their own document IDs and clean up after themselves.
 
-    npm test
+    npm test       # 192 tests; database tests need `npm run db:up` (CI starts PostgreSQL itself)
 
-## Known limitations
-- On every reconnect the server sends the whole history; version vectors
-  ("here is what I have, send only the rest") would make this efficient.
-- Viewing a version replays operations (no snapshots); rooms stay in memory once opened.
+| Layer | Examples |
+|---|---|
+| Unit | IDs, clock, RGA, outbox, token bucket, protocol, statistics |
+| Convergence | all 720 delivery orders, duplicates, seeded random simulations (2, 3, 5 sites) |
+| End to end | real server and clients over WebSockets: sync, history, revert, presence, hardening |
+| Chaos | random disconnects and offline periods; exactly as many stored operations as created, identical replicas |
+| Performance | latency test: p95 under one second including the database write |
+
+Replicas are compared by full internal state including tombstones. The tests are strong evidence of
+convergence, not a mathematical proof.
+
+## Project structure
+
+    src/crdt/        IDs, Lamport clock, RGA document, history (shared with the browser)
+    src/client/      SyncClient, outbox, presence, backoff, throttle, text diff (shared with the browser)
+    src/server/      protocol, rooms, store, API, auth, rate limiter, heartbeat, HTTP + WebSocket server
+    src/tools/       latency benchmark and statistics
+    scripts/         demo bots and the benchmark command
+    public/          the light-themed page and its glue code
+    docs/            architecture, convergence argument, decision records, demo guide
+    test/            unit, convergence, end-to-end and chaos tests
+
+## Tech stack
+
+Node.js 22 (plain JavaScript, ES modules), WebSockets (`ws`), PostgreSQL 17 (`pg`), Docker and
+Docker Compose, GitHub Actions (tests with a PostgreSQL service container, Docker build), the
+built-in `node:test` runner. No CRDT, sync, framework or UI libraries.
+
+## Known limitations and future work
+
+- **Structured documents** (nested lists or a spreadsheet grid, a stretch goal) are not implemented.
+- Every reconnect receives the whole history; **version vectors** would send only what is missing.
+- Viewing a version replays the log; **snapshots** would make it fast. Rooms stay in memory once opened.
+- Tombstones are never garbage-collected; list operations are O(n).
+- One shared access token (no identity or per-document permissions); needs HTTPS in real use.
+- A revert is several operations; a database failure midway could leave it partial (use a transaction).
+- Presence is a list; there are no coloured carets inside the text box.
 - A paste larger than 5000 characters is delivered over several reconnects (rate limit).
-- The access token is one shared secret in the URL: no user identity, needs HTTPS in real use.
-- Reverting needs a connection; a revert could be partial if the database fails midway.
-- Delete operations don't record who deleted.
-- Presence is shown as a list; there are no coloured carets inside the text box.
+- Single server process; scaling out needs routing by document and a pub/sub layer.
+- Two people typing at the *same position at the same moment* can end up with their characters
+  mixed together letter by letter. All replicas still show the identical text (convergence holds),
+  but it may read oddly; newer algorithms (for example Fugue) are designed to reduce this.
 
-## Roadmap
-Structured documents (nested lists or a spreadsheet grid) → final polish and write-up.
+## What I learned
+
+CRDTs and convergence, logical clocks, at-least-once delivery with idempotency, durable logs,
+WebSocket protocols, reconnect strategies (backoff with jitter), rate limiting with a token bucket,
+cross-site WebSocket hijacking, property-style and chaos testing, latency percentiles, and
+documenting decisions with ADRs.
+
+## License
+
+[MIT](LICENSE)

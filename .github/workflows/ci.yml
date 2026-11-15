@@ -31,3 +31,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t collab-sync-engine .

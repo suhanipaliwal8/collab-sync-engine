@@ -1,6 +1,6 @@
 import { RgaDocument } from '../crdt/rga-document.js';
 import { buildDocument, textAtVersion } from '../crdt/history.js';
-import { ROOT_ID, idToString, idsEqual } from '../crdt/id.js';
+import { ROOT_ID, compareIds, idToString, idsEqual } from '../crdt/id.js';
 import { InvalidOperationError } from './errors.js';
 import { diffText, applyChangeToDocument } from '../client/text-diff.js';
 import { silentLogger } from './logger.js';
@@ -140,6 +140,14 @@ export class DocumentRoom {
     if (!this._hasDependencies(op)) {
       this.logger.warn(`rejected ${description} from ${label(sender)}: refers to an unknown character`);
       throw new InvalidOperationError('Operation refers to a character this document does not have');
+    }
+  
+      // The convergence argument (docs/CONVERGENCE.md) assumes a character is always newer than
+    // its parent. Honest clients guarantee it through the Lamport clock; we enforce it here so a
+    // forged operation cannot break the assumption.
+    if (op.type === 'insert' && compareIds(op.id, op.parentId) <= 0) {
+      this.logger.warn(`rejected ${description} from ${label(sender)}: id is not newer than its parent`);
+      throw new InvalidOperationError('Operation id must be newer than its parent');
     }
 
     if (this.store) await this.store.append(this.documentId, key, op); // saved before anyone sees it

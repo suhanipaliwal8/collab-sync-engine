@@ -1,5 +1,5 @@
 # The sync server. Build it with:  docker build -t collab-sync-engine .
-FROM node:22-alpine
+FROM node:26-alpine
 
 WORKDIR /app
 

@@ -51,6 +51,28 @@ export class RgaDocument {
     return this.index.has(idToString(id));
   }
 
+    // A cursor position that survives other people's edits: the id of the visible character
+  // just before the cursor (ROOT_ID when the cursor is at the very start).
+  anchorAt(visibleIndex) {
+    if (visibleIndex <= 0) return ROOT_ID;
+    const visible = this.nodes.filter((node) => !node.deleted);
+    const node = visible[Math.min(visibleIndex, visible.length) - 1];
+    return node ? node.id : ROOT_ID;
+  }
+
+  // Where is a cursor with this anchor now? Returns null if we don't have that character yet.
+  // If the anchor character was deleted, the cursor collapses to where it used to be.
+  indexOfAnchor(anchor) {
+    if (idsEqual(anchor, ROOT_ID)) return 0;
+    if (!this.hasNode(anchor)) return null;
+    let index = 0;
+    for (const node of this.nodes) {
+      if (!node.deleted) index++;
+      if (idsEqual(node.id, anchor)) return index;
+    }
+    return null;
+  }
+
   // ---------- Internals ----------
 
   // Returns true if applied (or already applied), false if a dependency is missing.

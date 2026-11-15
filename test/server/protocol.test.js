@@ -66,3 +66,32 @@ test('rejects a revert with a negative or fractional version', () => {
 test('rejects a revert without a version', () => {
   assert.throws(() => parseClientMessage(JSON.stringify({ type: 'revert' })), /Invalid version/);
 });
+
+test('accepts a presence message with a name and a cursor', () => {
+  const cursor = { start: { counter: 2, siteId: 'A' }, end: { counter: 2, siteId: 'A' } };
+  const parsed = parseClientMessage(JSON.stringify({ type: 'presence', name: 'Alice', cursor, junk: 1 }));
+  assert.deepEqual(parsed, { type: 'presence', name: 'Alice', cursor });
+});
+
+test('cleans the display name', () => {
+  const clean = (name) => parseClientMessage(JSON.stringify({ type: 'presence', name })).name;
+  assert.equal(clean('  Al\u0007ice  '), 'Alice');
+  assert.equal(clean('x'.repeat(50)), 'x'.repeat(24));
+  assert.equal(clean('   '), null); // nothing left: leave the old name alone
+});
+
+test('rejects a malformed cursor or a name that is not text', () => {
+  const bad = [
+    { type: 'presence', cursor: { start: 'nope', end: 1 } },
+    { type: 'presence', cursor: { start: { counter: 1, siteId: 'A' } } },
+    { type: 'presence', name: 42 },
+  ];
+  for (const message of bad) {
+    assert.throws(() => parseClientMessage(JSON.stringify(message)), /Invalid presence/);
+  }
+});
+
+test('rejects ids with an absurdly long site id', () => {
+  const bad = { type: 'op', op: { ...validInsert.op, id: { counter: 1, siteId: 'x'.repeat(65) } } };
+  assert.throws(() => parseClientMessage(JSON.stringify(bad)), /Invalid operation/);
+});

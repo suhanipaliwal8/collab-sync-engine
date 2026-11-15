@@ -3,6 +3,7 @@ import { operationKey } from '../crdt/operation-key.js';
 import { applyChangeToDocument } from './text-diff.js';
 import { Outbox } from './outbox.js';
 import { reconnectDelay } from './backoff.js';
+import { PresenceBook } from './presence.js';
 
 const OPEN = 1; // WebSocket readyState "open" (same in browsers and in the ws library)
 
@@ -20,6 +21,7 @@ export class SyncClient {
     onChange = () => {},
     onStatus = () => {},
     onNotice = () => {},
+    onPresence = () => {},
     delay = reconnectDelay,
   }) {
     this.doc = new RgaDocument(siteId);
@@ -29,6 +31,9 @@ export class SyncClient {
     this.onStatus = onStatus; // { status, unsent } changed
     this.onNotice = onNotice; // 'reverted' and 'error' messages from the server
     this.delay = delay;
+    this.onPresence = onPresence;        // the list of other people changed
+    this.presence = new PresenceBook();  // who else is here (never saved)
+    this.myPresence = null;              // our own name/cursor, re-sent after every reconnect
 
     this.status = 'offline'; // 'connecting' | 'online' | 'offline'
     this.hasSynced = false;  // true once we have received the history at least once
@@ -47,6 +52,11 @@ export class SyncClient {
 
   get unsentCount() {
     return this.outbox.size;
+  }
+
+    // The other people in the document, with their cursors resolved to current positions.
+  get peers() {
+    return this.presence.resolve(this.doc);
   }
 
   connect() {
@@ -70,6 +80,7 @@ export class SyncClient {
 
   // The user (or a test) chooses to stay offline. Editing keeps working locally.
   goOffline() {
+    this._forgetPeers();
     this.paused = true;
     clearTimeout(this.timer);
     this.timer = null;
@@ -101,6 +112,25 @@ export class SyncClient {
     return this._send({ type: 'revert', version });
   }
 
+  // Tell the others who we are and where our cursor is. `start` and `end` are positions in the
+  // visible text; they are sent as anchors (character ids) so they survive concurrent edits.
+  // Presence is ephemeral: if we are offline nothing is queued, but the latest value is
+  // re-sent after the next sync.
+  updatePresence({ name = null, start = null, end = null } = {}) {
+    const message = { type: 'presence' };
+    if (name) message.name = name;
+    if (start !== null) {
+      message.cursor = { start: this.doc.anchorAt(start), end: this.doc.anchorAt(end ?? start) };
+    }
+    this.myPresence = { ...this.myPresence, ...message };
+    this._send(message);
+  }
+
+  _forgetPeers() {
+    this.presence.clear(); // while disconnected we cannot know who is still there
+    this.onPresence();
+  }
+
   _handleMessage(message) {
     if (message.type === 'sync') {
       for (const op of message.ops) this.doc.applyRemote(op); // duplicates are harmless
@@ -115,6 +145,7 @@ export class SyncClient {
       this.attempt = 0;
       this._setStatus('online');
       for (const op of this.outbox.pending()) this._send({ type: 'op', op }); // the rest, in order
+      if (this.myPresence) this._send(this.myPresence); // announce ourselves again
       this.onChange();
     } else if (message.type === 'op') {
       this.doc.applyRemote(message.op);
@@ -122,6 +153,15 @@ export class SyncClient {
     } else if (message.type === 'ack') {
       this.outbox.acknowledge(message.opKey);
       this._emitStatus();
+    } else if (message.type === 'presence_state') {
+      this.presence.replaceAll(message.peers);
+      this.onPresence();
+    } else if (message.type === 'presence') {
+      this.presence.set(message.peer);
+      this.onPresence();
+    } else if (message.type === 'presence_leave') {
+      this.presence.remove(message.id);
+      this.onPresence();
     } else {
       if (message.type === 'error' && message.opKey) {
         // The server will never accept this operation: stop retrying it.
@@ -139,6 +179,7 @@ export class SyncClient {
   }
 
   _scheduleReconnect() {
+    this._forgetPeers();
     this._setStatus('offline');
     if (this.paused) return;
     this.timer = setTimeout(() => {

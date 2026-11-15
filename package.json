@@ -9,7 +9,9 @@
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down",
     "bench": "node scripts/latency.js",
-    "demo": "node scripts/demo.js"
+    "demo": "node scripts/demo.js",
+    "app:up": "docker compose --profile app up -d --build --wait",
+    "app:down": "docker compose --profile app down"
   },
   "license": "MIT",
   "dependencies": {

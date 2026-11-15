@@ -408,3 +408,23 @@ test('presence from a client that is not in the room is ignored', () => {
   assert.equal(bob.messages.length, 1);
   assert.equal(room.presence.size, 0);
 });
+
+test('rejects an insert whose id is not newer than its parent', async () => {
+  const room = new DocumentRoom('doc');
+  const sender = fakeClient('c1');
+  await room.receive(sender, insert(5, 'alice', ROOT_ID, 'a'));
+
+  await assert.rejects(
+    room.receive(sender, insert(3, 'alice', { counter: 5, siteId: 'alice' }, 'b')),
+    InvalidOperationError,
+  );
+  assert.equal(room.versionCount, 1);
+});
+
+test('newer means newer in the total order: the same counter with a larger site id is accepted', async () => {
+  const room = new DocumentRoom('doc');
+  const sender = fakeClient('c1');
+  await room.receive(sender, insert(5, 'alice', ROOT_ID, 'a'));
+  await room.receive(sender, insert(5, 'bob', { counter: 5, siteId: 'alice' }, 'b')); // 5@bob > 5@alice
+  assert.equal(room.versionCount, 2);
+});

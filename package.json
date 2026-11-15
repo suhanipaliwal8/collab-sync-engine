@@ -8,7 +8,8 @@
     "test": "node --test \"test/**/*.test.js\"",
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down",
-    "bench": "node scripts/latency.js"
+    "bench": "node scripts/latency.js",
+    "demo": "node scripts/demo.js"
   },
   "license": "MIT",
   "dependencies": {

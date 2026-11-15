@@ -5,6 +5,7 @@ import { parseClientMessage } from './protocol.js';
 import { createHttpHandler } from './api.js';
 import { createAuthChecker, extractToken } from './auth.js';
 import { TokenBucket } from './token-bucket.js';
+import { startHeartbeat } from './heartbeat.js';
 import { ClientError, InvalidOperationError } from './errors.js';
 import { operationKey } from '../crdt/operation-key.js';
 import { silentLogger } from './logger.js';
@@ -58,6 +59,7 @@ export async function startSyncServer({
   maxClientsPerRoom = 50,
   maxRooms = 200,
   rateLimit = DEFAULT_RATE_LIMIT,
+  heartbeatMs = 30000, // how often connections are checked for life
 } = {}) {
   const rooms = new RoomManager({ store, logger, maxRooms });
   const room = await rooms.get(documentId); // the default document is loaded before we accept anyone
@@ -74,6 +76,7 @@ export async function startSyncServer({
 
   // noServer: we decide ourselves whether to accept each upgrade request.
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
+  const stopHeartbeat = startHeartbeat(wss, heartbeatMs); // drops connections that stopped answering
 
   httpServer.on('upgrade', async (request, socket, head) => {
     socket.on('error', () => {}); // the peer may vanish while we are deciding
@@ -123,6 +126,10 @@ export async function startSyncServer({
       },
     };
     const bucket = new TokenBucket(rateLimit); // every connection gets its own bucket
+    socket.isAlive = true; // see heartbeat.js
+    socket.on('pong', () => {
+      socket.isAlive = true;
+    });
 
     logger.info(`${client.id} connected from ${cleanAddress(request.socket.remoteAddress)}`);
     targetRoom.join(client);
@@ -142,6 +149,11 @@ export async function startSyncServer({
       } catch (error) {
         logger.warn(`${client.id} sent an invalid message: ${error.message}`);
         client.send({ type: 'error', message: error.message });
+        return;
+      }
+      if (message.type === 'presence') {
+        // Presence is ephemeral: relayed to the others, never saved, no acknowledgement.
+        targetRoom.updatePresence(client, message);
         return;
       }
 
@@ -185,6 +197,7 @@ export async function startSyncServer({
           for (const socket of wss.clients) socket.terminate();
         },
         close() {
+          stopHeartbeat();
           for (const socket of wss.clients) socket.terminate();
           httpServer.closeAllConnections();
           return new Promise((done) => httpServer.close(done));
